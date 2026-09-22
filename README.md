@@ -1,8 +1,12 @@
 # Score AWS template catalog
 
+For a short explanation of every part and the operating steps, start with [the quick runbook](docs/RUNBOOK.md).
+
 Reusable, pinned Terraform modules for the existing Score → Flux → tofu-controller platform. `templates/application-stack` is the single tofu-controller root and one state. The other five templates are child modules and can also be initialized independently for validation. No AWS or Kubernetes deployment is performed by this repository.
 
 Start with [`catalog.yaml`](catalog.yaml), then the selected [`contract.yaml`](templates/application-stack/contract.yaml). The recommended Score resource is `application-stack.aws`. An agent should use [`docs/PROVISIONER_CONTRACT.md`](docs/PROVISIONER_CONTRACT.md) to write a provisioner later. This catalog does not create one automatically.
+
+A small LangChain provisioner agent lives in [`agents/provisioner-agent`](agents/provisioner-agent). It renders the input Secret and Terraform CR YAML from a request file; it does not deploy anything.
 
 ## Inputs and use
 
