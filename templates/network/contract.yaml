@@ -1,0 +1,165 @@
+template_name: network
+template_path: ./templates/network
+purpose: New four-tier VPC or references to an existing VPC and subnets
+template_version: 1.0.0
+required_terraform_version: '>= 1.7.0, < 2.0.0'
+required_aws_provider_version: = 5.100.0
+required_random_provider_version: null
+upstream_modules:
+- address: terraform-aws-modules/vpc/aws
+  version: 5.21.0
+inputs:
+- name: name
+  type: string
+  required: true
+  sensitive: false
+  validations: []
+- name: create_vpc
+  type: bool
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: 'true'
+- name: vpc_cidr
+  type: string
+  required: false
+  sensitive: false
+  validations:
+  - Provide a valid non-open IPv4 VPC CIDR.
+  default_hcl: '"10.80.0.0/16"'
+- name: availability_zones
+  type: list(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '[]'
+- name: public_subnet_cidrs
+  type: list(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '[]'
+- name: private_subnet_cidrs
+  type: list(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '[]'
+- name: database_subnet_cidrs
+  type: list(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '[]'
+- name: cache_subnet_cidrs
+  type: list(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '[]'
+- name: enable_nat_gateway
+  type: bool
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: 'false'
+- name: single_nat_gateway
+  type: bool
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: 'true'
+- name: existing_vpc_id
+  type: string
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: 'null'
+- name: existing_public_subnet_ids
+  type: list(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '[]'
+- name: existing_private_subnet_ids
+  type: list(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '[]'
+- name: existing_database_subnet_ids
+  type: list(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '[]'
+- name: existing_cache_subnet_ids
+  type: list(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '[]'
+- name: tags
+  type: map(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '{}'
+outputs:
+- name: vpc_id
+  type: string
+  sensitive: false
+- name: public_subnet_ids
+  type: list(string)
+  sensitive: false
+- name: private_subnet_ids
+  type: list(string)
+  sensitive: false
+- name: database_subnet_ids
+  type: list(string)
+  sensitive: false
+- name: cache_subnet_ids
+  type: list(string)
+  sensitive: false
+optional_components:
+- new_vpc
+- nat_gateway
+dependencies: []
+estimated_destructive_operations:
+- VPC and four subnet tiers
+- NAT gateways and elastic IPs
+special_teardown_resources:
+- NAT gateway deletion
+- ENIs can hold subnet and VPC deletion
+score_resource_type: application-stack
+score_class: aws
+direct_terraform_cr_root: false
+terraform_cr_source_path: ./templates/application-stack
+suggested_input_secret_name: secret-<guid>
+suggested_output_secret_name: tf-output-<guid>
+required_iam_actions:
+  ec2:
+  - Describe*
+  - CreateVpc
+  - DeleteVpc
+  - CreateSubnet
+  - DeleteSubnet
+  - CreateRouteTable
+  - DeleteRouteTable
+  - CreateRoute
+  - DeleteRoute
+  - CreateNatGateway
+  - DeleteNatGateway
+  - AllocateAddress
+  - ReleaseAddress
+  - CreateInternetGateway
+  - DeleteInternetGateway
+  - CreateTags
+  - DeleteTags
+connectivity_assumptions:
+- Existing VPC routing remains caller managed
+- Kubernetes clients may need peering, Transit Gateway, or VPN
+production_safeguards:
+- Two AZs in create mode
+- No open ingress
+- NAT disabled unless requested

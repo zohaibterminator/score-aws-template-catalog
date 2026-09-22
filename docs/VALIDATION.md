@@ -1,0 +1,7 @@
+# Validation record — 2026-09-22
+
+Environment: Windows workspace with Terraform CLI 1.10.5, AWS provider 5.100.0, and random provider 3.9.1. OpenTofu, tflint, and checkov were not installed. Git Bash ran the local script after sandbox process-start approval. No AWS credentials, backend initialization, plan, apply, Kubernetes command, or deployment was used.
+
+Executed `terraform fmt -check -recursive` and `bash scripts/validate.sh`. The script ran `terraform init -backend=false -input=false -lockfile=readonly` and `terraform validate` for `network`, `postgres`, `object-storage`, `cache`, `queue`, and `application-stack`; all six succeeded with the final pinned module versions. JSON Schema and Terraform-interface contract checks passed for all six. Offline input cases covered minimal, complete, existing VPC, all optional services disabled, invalid CIDRs, sensitive variable declarations, output types, naming expressions, required tags, privacy, and production deletion defaults. `terraform console` evaluated three distinct stable names, required tags, and production deletion flags without a plan. tflint and checkov were skipped because their binaries were unavailable.
+
+This is syntax/interface and offline contract validation. It does not prove AWS API behavior, account quotas, current cluster runner version, networking routes, IAM sufficiency, controller null-output serialization, or deletion timing. Test a new disposable workload through the actual Score → Flux → tofu-controller path before production use.

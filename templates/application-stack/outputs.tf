@@ -1,0 +1,16 @@
+output "stack_name" { value = var.stack_name }
+output "vpc_id" { value = module.network.vpc_id }
+output "private_subnet_ids" { value = module.network.private_subnet_ids }
+output "database_subnet_ids" { value = module.network.database_subnet_ids }
+output "cache_subnet_ids" { value = module.network.cache_subnet_ids }
+output "db_host" { value = var.enable_rds ? module.postgres[0].host : null }
+output "db_port" { value = var.enable_rds ? module.postgres[0].port : null }
+output "db_name" { value = var.enable_rds ? module.postgres[0].name : null }
+output "db_username" { value = var.enable_rds ? module.postgres[0].username : null }
+output "s3_bucket_name" { value = var.enable_s3 ? module.object_storage[0].bucket_name : null }
+output "s3_bucket_arn" { value = var.enable_s3 ? module.object_storage[0].bucket_arn : null }
+output "cache_endpoint" { value = var.enable_cache ? module.cache[0].endpoint : null }
+output "cache_port" { value = var.enable_cache ? module.cache[0].port : null }
+output "queue_url" { value = var.enable_sqs ? module.queue[0].queue_url : null }
+output "queue_arn" { value = var.enable_sqs ? module.queue[0].queue_arn : null }
+output "dead_letter_queue_url" { value = var.enable_sqs ? module.queue[0].dead_letter_queue_url : null }

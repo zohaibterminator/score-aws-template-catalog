@@ -1,0 +1,14 @@
+stack_name = "orders"
+resource_guid = "00000000-0000-4000-8000-000000000003"
+workload = "orders-api"
+environment = "dev"
+plane = "application"
+region = "us-east-1"
+create_vpc = false
+existing_vpc_id = "vpc-EXAMPLE"
+existing_private_subnet_ids = ["subnet-APP-A", "subnet-APP-B"]
+existing_database_subnet_ids = ["subnet-DB-A", "subnet-DB-B"]
+existing_cache_subnet_ids = ["subnet-CACHE-A", "subnet-CACHE-B"]
+database_client_cidr_blocks = ["10.90.0.0/20"]
+cache_client_cidr_blocks = ["10.90.0.0/20"]
+enable_cache = true

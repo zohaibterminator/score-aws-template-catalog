@@ -1,0 +1,77 @@
+inspection_date: '2026-09-22'
+redistribution_note: No upstream module source files are copied or vendored. All are Terraform Registry references pinned in module blocks.
+sources:
+- repository_url: https://github.com/terraform-aws-modules/terraform-aws-vpc
+  module_registry_address: terraform-aws-modules/vpc/aws
+  exact_version: 5.21.0
+  license: Apache-2.0
+  files_copied: []
+  use: referenced
+  selection_reason: Mature four-tier VPC and NAT topology with AWS provider 5 compatibility.
+  date_inspected: '2026-09-22'
+  compatibility_notes: Requires AWS provider >=5.79; initialized with AWS 5.100.0.
+- repository_url: https://github.com/terraform-aws-modules/terraform-aws-security-group
+  module_registry_address: terraform-aws-modules/security-group/aws
+  exact_version: 5.3.1
+  license: Apache-2.0
+  files_copied: []
+  use: referenced
+  selection_reason: Dedicated database and cache security groups with explicit CIDR ingress.
+  date_inspected: '2026-09-22'
+  compatibility_notes: Requires AWS provider >=3.29; initialized with AWS 5.100.0.
+- repository_url: https://github.com/terraform-aws-modules/terraform-aws-rds
+  module_registry_address: terraform-aws-modules/rds/aws
+  exact_version: 6.13.1
+  license: Apache-2.0
+  files_copied: []
+  use: referenced
+  selection_reason: Latest inspected pre-v7 RDS release supporting the existing Score password input and AWS provider 5.
+  date_inspected: '2026-09-22'
+  compatibility_notes: Requires AWS provider >=5.92; v7 requires AWS 6 and Terraform >=1.11.
+- repository_url: https://github.com/terraform-aws-modules/terraform-aws-s3-bucket
+  module_registry_address: terraform-aws-modules/s3-bucket/aws
+  exact_version: 4.11.0
+  license: Apache-2.0
+  files_copied: []
+  use: referenced
+  selection_reason: Pre-v5 release with private bucket, encryption, and TLS policy controls on AWS provider 5.
+  date_inspected: '2026-09-22'
+  compatibility_notes: Requires AWS provider >=5.83; v5 requires AWS provider 6.
+- repository_url: https://github.com/terraform-aws-modules/terraform-aws-elasticache
+  module_registry_address: terraform-aws-modules/elasticache/aws
+  exact_version: 1.11.1
+  license: Apache-2.0
+  files_copied: []
+  use: referenced
+  selection_reason: Redis and Valkey replication groups with private subnet, encryption, and snapshot controls.
+  date_inspected: '2026-09-22'
+  compatibility_notes: Requires AWS provider >=5.93 and random >=3.0; initialized with AWS 5.100.0 and random 3.9.1.
+- repository_url: https://github.com/terraform-aws-modules/terraform-aws-sqs
+  module_registry_address: terraform-aws-modules/sqs/aws
+  exact_version: 4.3.1
+  license: Apache-2.0
+  files_copied: []
+  use: referenced
+  selection_reason: Queue and DLQ with managed SSE and redrive controls.
+  date_inspected: '2026-09-22'
+  compatibility_notes: Requires AWS provider >=4.36; initialized with AWS 5.100.0.
+- repository_url: https://github.com/hashicorp/terraform-provider-aws
+  module_registry_address: null
+  provider_registry_address: registry.terraform.io/hashicorp/aws
+  exact_version: 5.100.0
+  license: MPL-2.0
+  files_copied: []
+  use: referenced
+  selection_reason: Existing platform uses AWS provider 5; this exact release satisfies all selected modules.
+  date_inspected: '2026-09-22'
+  compatibility_notes: Root and leaf lock files select 5.100.0; no AWS provider major upgrade.
+- repository_url: https://github.com/hashicorp/terraform-provider-random
+  module_registry_address: null
+  provider_registry_address: registry.terraform.io/hashicorp/random
+  exact_version: 3.9.1
+  license: MPL-2.0
+  files_copied: []
+  use: referenced
+  selection_reason: Transitive requirement of the pinned RDS and ElastiCache modules.
+  date_inspected: '2026-09-22'
+  compatibility_notes: Root, PostgreSQL, and cache lock files select 3.9.1.

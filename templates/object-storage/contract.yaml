@@ -1,0 +1,70 @@
+template_name: object-storage
+template_path: ./templates/object-storage
+purpose: Private versioned S3 bucket with encryption and TLS-only access
+template_version: 1.0.0
+required_terraform_version: '>= 1.7.0, < 2.0.0'
+required_aws_provider_version: = 5.100.0
+required_random_provider_version: null
+upstream_modules:
+- address: terraform-aws-modules/s3-bucket/aws
+  version: 4.11.0
+inputs:
+- name: name
+  type: string
+  required: true
+  sensitive: false
+  validations: []
+- name: environment
+  type: string
+  required: true
+  sensitive: false
+  validations: []
+- name: allow_nonprod_force_destroy
+  type: bool
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: 'false'
+- name: tags
+  type: map(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '{}'
+outputs:
+- name: bucket_name
+  type: string
+  sensitive: false
+- name: bucket_arn
+  type: string
+  sensitive: false
+optional_components: []
+dependencies: []
+estimated_destructive_operations:
+- S3 bucket and its objects if force destroy is explicitly enabled in nonproduction
+special_teardown_resources:
+- Non-empty versioned buckets must be emptied before default destruction
+score_resource_type: application-stack
+score_class: aws
+direct_terraform_cr_root: false
+terraform_cr_source_path: ./templates/application-stack
+suggested_input_secret_name: secret-<guid>
+suggested_output_secret_name: tf-output-<guid>
+required_iam_actions:
+  s3:
+  - CreateBucket
+  - DeleteBucket
+  - GetBucket*
+  - PutBucket*
+  - ListBucket
+  - ListBucketVersions
+  - DeleteObject
+  - DeleteObjectVersion
+  - PutBucketTagging
+connectivity_assumptions:
+- Kubernetes clients need S3 access through NAT, VPC endpoint, or existing egress
+production_safeguards:
+- Public access blocked
+- SSE-S3
+- TLS-only policy
+- Production force destroy disabled

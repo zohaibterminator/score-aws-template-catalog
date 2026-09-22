@@ -1,0 +1,9 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "enabledManagers": ["terraform", "github-actions"],
+  "packageRules": [
+    {"matchManagers": ["terraform"], "matchUpdateTypes": ["major"], "enabled": false},
+    {"matchManagers": ["terraform"], "automerge": false}
+  ]
+}

@@ -1,0 +1,11 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+override.tf
+*_override.tf
+*.auto.tfvars
+!*.tfvars.example
+.DS_Store
+__pycache__/

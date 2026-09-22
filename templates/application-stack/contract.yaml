@@ -1,0 +1,418 @@
+template_name: application-stack
+template_path: ./templates/application-stack
+purpose: Primary tofu-controller root composing all application infrastructure in
+  one state
+template_version: 1.0.0
+required_terraform_version: '>= 1.7.0, < 2.0.0'
+required_aws_provider_version: = 5.100.0
+required_random_provider_version: = 3.9.1
+upstream_modules:
+- address: terraform-aws-modules/vpc/aws
+  version: 5.21.0
+- address: terraform-aws-modules/security-group/aws
+  version: 5.3.1
+- address: terraform-aws-modules/rds/aws
+  version: 6.13.1
+- address: terraform-aws-modules/s3-bucket/aws
+  version: 4.11.0
+- address: terraform-aws-modules/elasticache/aws
+  version: 1.11.1
+- address: terraform-aws-modules/sqs/aws
+  version: 4.3.1
+inputs:
+- name: stack_name
+  type: string
+  required: true
+  sensitive: false
+  validations:
+  - stack_name must be 3–40 lowercase AWS-safe characters.
+- name: resource_guid
+  type: string
+  required: true
+  sensitive: false
+  validations:
+  - resource_guid must be a lowercase UUID.
+- name: workload
+  type: string
+  required: true
+  sensitive: false
+  validations: []
+- name: environment
+  type: string
+  required: true
+  sensitive: false
+  validations:
+  - Unsupported environment.
+- name: plane
+  type: string
+  required: true
+  sensitive: false
+  validations:
+  - Invalid plane label.
+- name: region
+  type: string
+  required: true
+  sensitive: false
+  validations:
+  - Invalid AWS region.
+- name: create_vpc
+  type: bool
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: 'true'
+- name: vpc_cidr
+  type: string
+  required: false
+  sensitive: false
+  validations:
+  - Invalid VPC CIDR.
+  default_hcl: '"10.80.0.0/16"'
+- name: availability_zones
+  type: list(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '[]'
+- name: public_subnet_cidrs
+  type: list(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '[]'
+- name: private_subnet_cidrs
+  type: list(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '[]'
+- name: database_subnet_cidrs
+  type: list(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '[]'
+- name: cache_subnet_cidrs
+  type: list(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '[]'
+- name: enable_nat_gateway
+  type: bool
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: 'false'
+- name: single_nat_gateway
+  type: bool
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: 'true'
+- name: existing_vpc_id
+  type: string
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: 'null'
+- name: existing_public_subnet_ids
+  type: list(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '[]'
+- name: existing_private_subnet_ids
+  type: list(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '[]'
+- name: existing_database_subnet_ids
+  type: list(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '[]'
+- name: existing_cache_subnet_ids
+  type: list(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '[]'
+- name: database_client_cidr_blocks
+  type: list(string)
+  required: false
+  sensitive: false
+  validations:
+  - Invalid or open database client CIDR.
+  default_hcl: '[]'
+- name: cache_client_cidr_blocks
+  type: list(string)
+  required: false
+  sensitive: false
+  validations:
+  - Invalid or open cache client CIDR.
+  default_hcl: '[]'
+- name: enable_rds
+  type: bool
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: 'true'
+- name: enable_s3
+  type: bool
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: 'true'
+- name: enable_cache
+  type: bool
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: 'false'
+- name: enable_sqs
+  type: bool
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: 'false'
+- name: db_name
+  type: string
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '"appdb"'
+- name: db_username
+  type: string
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '"scoreadmin"'
+- name: db_password
+  type: string
+  required: false
+  sensitive: true
+  validations: []
+  default_hcl: 'null'
+- name: db_instance_class
+  type: string
+  required: false
+  sensitive: false
+  validations:
+  - Invalid RDS instance class.
+  default_hcl: '"db.t3.medium"'
+- name: db_allocated_storage
+  type: number
+  required: false
+  sensitive: false
+  validations:
+  - RDS storage must be 20–65536 GiB.
+  default_hcl: '20'
+- name: db_engine_version
+  type: string
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '"16"'
+- name: cache_engine
+  type: string
+  required: false
+  sensitive: false
+  validations:
+  - Use redis or valkey.
+  default_hcl: '"redis"'
+- name: cache_engine_version
+  type: string
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: 'null'
+- name: cache_node_type
+  type: string
+  required: false
+  sensitive: false
+  validations:
+  - Invalid cache node type.
+  default_hcl: '"cache.t4g.small"'
+- name: cache_auth_token
+  type: string
+  required: false
+  sensitive: true
+  validations: []
+  default_hcl: 'null'
+- name: allow_prod_destroy
+  type: bool
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: 'false'
+- name: allow_nonprod_bucket_force_destroy
+  type: bool
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: 'false'
+- name: extra_tags
+  type: map(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '{}'
+outputs:
+- name: stack_name
+  type: string
+  sensitive: false
+- name: vpc_id
+  type: string
+  sensitive: false
+- name: private_subnet_ids
+  type: list(string)
+  sensitive: false
+- name: database_subnet_ids
+  type: list(string)
+  sensitive: false
+- name: cache_subnet_ids
+  type: list(string)
+  sensitive: false
+- name: db_host
+  type: string|null
+  sensitive: false
+- name: db_port
+  type: number|null
+  sensitive: false
+- name: db_name
+  type: string|null
+  sensitive: false
+- name: db_username
+  type: string|null
+  sensitive: false
+- name: s3_bucket_name
+  type: string|null
+  sensitive: false
+- name: s3_bucket_arn
+  type: string|null
+  sensitive: false
+- name: cache_endpoint
+  type: string|null
+  sensitive: false
+- name: cache_port
+  type: number|null
+  sensitive: false
+- name: queue_url
+  type: string|null
+  sensitive: false
+- name: queue_arn
+  type: string|null
+  sensitive: false
+- name: dead_letter_queue_url
+  type: string|null
+  sensitive: false
+optional_components:
+- rds
+- s3
+- cache
+- sqs
+- new_vpc
+- nat_gateway
+dependencies:
+- network
+- postgres
+- object-storage
+- cache
+- queue
+estimated_destructive_operations:
+- All enabled resources in the stack, including network resources owned by this state
+special_teardown_resources:
+- Input Secret must outlive Terraform CR
+- Production RDS deletion protection and final snapshot
+- Non-empty S3 buckets
+- ElastiCache and NAT deletion time
+- ENIs blocking subnet/VPC deletion
+score_resource_type: application-stack
+score_class: aws
+direct_terraform_cr_root: true
+terraform_cr_source_path: ./templates/application-stack
+suggested_input_secret_name: secret-<guid>
+suggested_output_secret_name: tf-output-<guid>
+required_iam_actions:
+  ec2:
+  - AllocateAddress
+  - AuthorizeSecurityGroupIngress
+  - CreateInternetGateway
+  - CreateNatGateway
+  - CreateRoute
+  - CreateRouteTable
+  - CreateSecurityGroup
+  - CreateSubnet
+  - CreateTags
+  - CreateVpc
+  - DeleteInternetGateway
+  - DeleteNatGateway
+  - DeleteRoute
+  - DeleteRouteTable
+  - DeleteSecurityGroup
+  - DeleteSubnet
+  - DeleteTags
+  - DeleteVpc
+  - Describe*
+  - DescribeSecurityGroups
+  - ReleaseAddress
+  - RevokeSecurityGroupIngress
+  rds:
+  - AddTagsToResource
+  - CreateDBInstance
+  - CreateDBOptionGroup
+  - CreateDBParameterGroup
+  - CreateDBSubnetGroup
+  - DeleteDBInstance
+  - DeleteDBOptionGroup
+  - DeleteDBParameterGroup
+  - DeleteDBSubnetGroup
+  - Describe*
+  - ModifyDBInstance
+  - ModifyDBParameterGroup
+  - ModifyDBSubnetGroup
+  - RemoveTagsFromResource
+  s3:
+  - CreateBucket
+  - DeleteBucket
+  - DeleteObject
+  - DeleteObjectVersion
+  - GetBucket*
+  - ListBucket
+  - ListBucketVersions
+  - PutBucket*
+  - PutBucketTagging
+  elasticache:
+  - AddTagsToResource
+  - CreateCacheSubnetGroup
+  - CreateReplicationGroup
+  - DeleteCacheSubnetGroup
+  - DeleteReplicationGroup
+  - Describe*
+  - ModifyCacheSubnetGroup
+  - ModifyReplicationGroup
+  - RemoveTagsFromResource
+  sqs:
+  - CreateQueue
+  - DeleteQueue
+  - GetQueueAttributes
+  - GetQueueUrl
+  - ListQueueTags
+  - SetQueueAttributes
+  - TagQueue
+  - UntagQueue
+connectivity_assumptions:
+- The Kubernetes cluster is not assumed to be in the created VPC
+- Supply restricted client CIDRs plus peering, Transit Gateway, VPN, or equivalent
+  private routing
+- S3 and SQS clients need AWS API egress
+production_safeguards:
+- One state and root provider
+- Production RDS deletion protection and final snapshot
+- Production S3 force destroy disabled
+- Production cache requires auth token
+- No default database or cache ingress
+- No plaintext password output

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/score-aws-template-catalog/template-contract.schema.json",
+  "type": "object",
+  "required": ["template_name", "template_path", "purpose", "template_version", "required_terraform_version", "required_aws_provider_version", "upstream_modules", "inputs", "outputs", "optional_components", "dependencies", "estimated_destructive_operations", "special_teardown_resources", "score_resource_type", "score_class", "direct_terraform_cr_root", "terraform_cr_source_path", "suggested_input_secret_name", "suggested_output_secret_name", "required_iam_actions", "connectivity_assumptions", "production_safeguards"],
+  "properties": {
+    "template_name": {"type": "string", "minLength": 1},
+    "template_path": {"type": "string", "pattern": "^\\./templates/"},
+    "purpose": {"type": "string", "minLength": 1},
+    "template_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "required_terraform_version": {"type": "string", "minLength": 1},
+    "required_aws_provider_version": {"type": "string", "pattern": "^= [0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "required_random_provider_version": {"type": ["string", "null"]},
+    "upstream_modules": {"type": "array", "items": {"type": "object", "required": ["address", "version"], "properties": {"address": {"type": "string", "pattern": "^[^/]+/[^/]+/aws$"}, "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"}}, "additionalProperties": false}},
+    "inputs": {"type": "array", "items": {"type": "object", "required": ["name", "type", "required", "sensitive", "validations"], "properties": {"name": {"type": "string"}, "type": {"type": "string"}, "required": {"type": "boolean"}, "sensitive": {"type": "boolean"}, "validations": {"type": "array", "items": {"type": "string"}}, "default_hcl": {"type": "string"}}, "additionalProperties": false}},
+    "outputs": {"type": "array", "items": {"type": "object", "required": ["name", "type", "sensitive"], "properties": {"name": {"type": "string"}, "type": {"type": "string"}, "sensitive": {"type": "boolean"}}, "additionalProperties": false}},
+    "optional_components": {"$ref": "#/$defs/strings"},
+    "dependencies": {"$ref": "#/$defs/strings"},
+    "estimated_destructive_operations": {"$ref": "#/$defs/strings"},
+    "special_teardown_resources": {"$ref": "#/$defs/strings"},
+    "score_resource_type": {"type": "string"},
+    "score_class": {"const": "aws"},
+    "direct_terraform_cr_root": {"type": "boolean"},
+    "terraform_cr_source_path": {"type": "string", "pattern": "^\\./templates/"},
+    "suggested_input_secret_name": {"const": "secret-<guid>"},
+    "suggested_output_secret_name": {"const": "tf-output-<guid>"},
+    "required_iam_actions": {"type": "object", "additionalProperties": {"$ref": "#/$defs/strings"}},
+    "connectivity_assumptions": {"$ref": "#/$defs/strings"},
+    "production_safeguards": {"$ref": "#/$defs/strings"}
+  },
+  "$defs": {"strings": {"type": "array", "items": {"type": "string"}}},
+  "additionalProperties": false
+}

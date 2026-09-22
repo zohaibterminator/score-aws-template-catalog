@@ -1,0 +1,9 @@
+# Architecture
+
+Score assigns a stable GUID to `application-stack.aws`. A future provisioner writes one input Secret (`secret-<guid>`) and one Terraform CR (`stack-<guid>`). Flux reconciles those manifests. The CR points at `./templates/application-stack` in a tagged GitRepository artifact. The root invokes the network, PostgreSQL, object-storage, cache, and queue child modules, so all enabled resources share one tofu-controller Kubernetes-backed state. Terraform outputs are copied to `tf-output-<guid>` and Score resource outputs use encoded Secret references.
+
+The root is the only provider configuration. Child modules declare provider requirements but inherit the root provider. The AWS provider applies `Application`, `Workload`, `Environment`, `Plane`, `ResourceGuid`, `ManagedBy`, and `platform.company/plane` tags by default; explicit module tags cover supported resources. AWS account ID is read at runtime only to make the S3 bucket name globally distinctive.
+
+New-VPC mode creates public, private, database, and cache subnets in the supplied AZs. NAT is optional; single NAT is a cost-focused choice, while one per AZ is more resilient. Existing-VPC mode creates no VPC/subnet resources and accepts existing network IDs. In either mode, database and cache security groups allow only supplied client CIDRs. The Kubernetes platform may live elsewhere and must have private routing and DNS to the selected VPC. S3/SQS access needs AWS API egress or existing endpoints.
+
+Feature flags create RDS, S3, cache, and SQS independently. Disabled service outputs are `null`; subnet outputs are always lists. Deleting a component from the root destroys its tracked AWS resources when the CR reconciles. Production deletion controls can intentionally block that operation until reviewed. Review the entire root plan when toggling a flag or changing the networking mode.
