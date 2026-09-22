@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
-"""LangChain wrapper for the application-stack provisioner renderer."""
+"""LangChain agent for previewing or publishing application-stack manifests."""
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 import sys
 
 from renderer import load_request, render_manifests
+from publish import publish
 
 
 SYSTEM_PROMPT = """You are a provisioner agent for score-aws-template-catalog.
-Render Kubernetes YAML for application-stack.aws by calling the provided tool.
-Do not invent AWS credentials, run Terraform, run kubectl, plan, apply, or deploy.
-Return only the rendered YAML plus short validation notes."""
+Use the provided tool exactly once for the requested action. The deterministic renderer
+selects child templates and owns validation. Never invent credentials or change YAML.
+Return the tool result."""
 
 
-def run_agent(request_path: Path) -> str:
+def run_agent(request_path: Path, score_api_repo: Path, do_publish: bool = False) -> str:
     try:
         from langchain.agents import AgentExecutor, create_tool_calling_agent
         from langchain_core.prompts import ChatPromptTemplate
@@ -27,32 +29,51 @@ def run_agent(request_path: Path) -> str:
         ) from exc
 
     request = load_request(request_path)
+    render_manifests(request)  # Validate locally before any model call or Git write.
+    called = False
 
-    @tool
+    @tool(return_direct=True)
     def render_application_stack_manifests() -> str:
-        """Render the Secret and Terraform CR for the request YAML."""
+        """Preview the Terraform CR for the selected application-stack components."""
+        nonlocal called
+        called = True
         return render_manifests(request)
+
+    @tool(return_direct=True)
+    def publish_application_stack_manifests() -> str:
+        """Commit and push the Terraform CR to score-api/.score-k8s/provisioners."""
+        nonlocal called
+        called = True
+        return f"Published {publish(request_path, score_api_repo)}"
 
     llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0)
     prompt = ChatPromptTemplate.from_messages(
         [
             ("system", SYSTEM_PROMPT),
-            ("human", "Render the provisioner manifests for this request: {request}"),
+            ("human", "{action} the application-stack provisioner for these components: {components}."),
             ("placeholder", "{agent_scratchpad}"),
         ]
     )
-    tools = [render_application_stack_manifests]
+    tools = [publish_application_stack_manifests] if do_publish else [render_application_stack_manifests]
     agent = create_tool_calling_agent(llm, tools, prompt)
     executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
-    result = executor.invoke({"request": request})
+    result = executor.invoke({"action": "Publish" if do_publish else "Preview", "components": request.get("components", "request flags")})
+    if not called:
+        raise RuntimeError("The model did not call the provisioner tool.")
     return str(result["output"])
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("Usage: agent.py <request.yaml>", file=sys.stderr)
-        return 2
-    print(run_agent(Path(sys.argv[1])))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("request", type=Path)
+    parser.add_argument("--publish", action="store_true")
+    parser.add_argument("--score-api-repo", type=Path, default=Path(__file__).resolve().parents[3] / "score-api")
+    args = parser.parse_args()
+    try:
+        print(run_agent(args.request, args.score_api_repo, args.publish))
+    except (ValueError, RuntimeError) as exc:
+        print(exc, file=sys.stderr)
+        return 1
     return 0
 
 

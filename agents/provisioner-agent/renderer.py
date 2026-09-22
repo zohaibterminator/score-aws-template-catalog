@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render tofu-controller manifests for the application-stack template."""
+"""Render a tofu-controller manifest for the application-stack template."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -16,26 +16,13 @@ ROOT = Path(__file__).resolve().parents[2]
 CONTRACT_PATH = ROOT / "templates" / "application-stack" / "contract.yaml"
 
 SENSITIVE_KEYS = {"db_password", "cache_auth_token"}
-OUTPUTS = [
-    "stack_name",
-    "vpc_id",
-    "private_subnet_ids",
-    "database_subnet_ids",
-    "cache_subnet_ids",
-    "db_host",
-    "db_port",
-    "db_name",
-    "db_username",
-    "s3_bucket_name",
-    "s3_bucket_arn",
-    "cache_endpoint",
-    "cache_port",
-    "queue_url",
-    "queue_arn",
-    "dead_letter_queue_url",
-]
-
-
+COMPONENT_FLAGS = {
+    "network": "create_vpc",
+    "postgres": "enable_rds",
+    "object-storage": "enable_s3",
+    "cache": "enable_cache",
+    "queue": "enable_sqs",
+}
 class ManifestDumper(yaml.SafeDumper):
     pass
 
@@ -57,12 +44,35 @@ def load_request(path: Path) -> dict[str, Any]:
     return data
 
 
-def contract_inputs() -> set[str]:
-    contract = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
-    return {entry["name"] for entry in contract["inputs"]}
+def contract() -> dict[str, Any]:
+    return yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
+
+
+def resolved_request(request: dict[str, Any]) -> dict[str, Any]:
+    result = dict(request)
+    components = result.pop("components", None)
+    if components is not None:
+        if not isinstance(components, list) or any(not isinstance(item, str) for item in components) or len(components) != len(set(components)):
+            raise ValueError("components must be a list without duplicates.")
+        unknown = set(components) - set(COMPONENT_FLAGS)
+        if unknown:
+            raise ValueError(f"Unknown components: {', '.join(sorted(unknown))}")
+        for component, flag in COMPONENT_FLAGS.items():
+            enabled = component in components
+            if flag in result and result[flag] != enabled:
+                raise ValueError(f"{flag} conflicts with components.")
+            result[flag] = enabled
+    return result
 
 
 def validate_request(request: dict[str, Any]) -> None:
+    allowed = {entry["name"] for entry in contract()["inputs"]} | {"resource_uid", "input_secret_name", "components"}
+    unknown = set(request) - allowed
+    if unknown:
+        raise ValueError(f"Unknown request fields: {', '.join(sorted(unknown))}")
+    if set(request) & SENSITIVE_KEYS:
+        raise ValueError("Do not put secret values in the request or Git. Use input_secret_name.")
+    request = resolved_request(request)
     required = ["stack_name", "resource_guid", "workload", "resource_uid", "environment", "plane", "region"]
     missing = [name for name in required if not request.get(name)]
     if missing:
@@ -79,10 +89,11 @@ def validate_request(request: dict[str, Any]) -> None:
             if str(network) == "0.0.0.0/0":
                 raise ValueError(f"{key} must not include 0.0.0.0/0.")
 
-    if request.get("enable_rds", True) and not request.get("db_password"):
-        raise ValueError("db_password is required when enable_rds is true.")
-    if request.get("environment") == "prod" and request.get("enable_cache") and not request.get("cache_auth_token"):
-        raise ValueError("cache_auth_token is required for production cache.")
+    needs_secret = request.get("enable_rds", True) or (request.get("enable_cache") and request["environment"] == "prod")
+    if needs_secret and not request.get("input_secret_name"):
+        raise ValueError("input_secret_name is required for RDS or production cache.")
+    if request.get("input_secret_name") and not re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", request["input_secret_name"]):
+        raise ValueError("input_secret_name must be a Kubernetes DNS name.")
 
 
 def tf_value(value: Any) -> str:
@@ -93,36 +104,20 @@ def tf_value(value: Any) -> str:
     return str(value)
 
 
-def build_secret(request: dict[str, Any]) -> dict[str, Any]:
-    guid = request["resource_guid"]
-    string_data = {key: str(request[key]) for key in SENSITIVE_KEYS if request.get(key) is not None}
-    return {
-        "apiVersion": "v1",
-        "kind": "Secret",
-        "metadata": {
-            "name": f"secret-{guid}",
-            "namespace": "default",
-            "labels": {"platform.company/plane": request["plane"]},
-            "annotations": {
-                "k8s.score.dev/resource-uid": request["resource_uid"],
-                "k8s.score.dev/source-workload": request["workload"],
-                "kustomize.toolkit.fluxcd.io/prune": "disabled",
-            },
-        },
-        "type": "Opaque",
-        "stringData": string_data,
-    }
-
-
 def build_terraform_cr(request: dict[str, Any]) -> dict[str, Any]:
     guid = request["resource_guid"]
-    input_names = contract_inputs()
+    metadata = contract()
+    input_names = {entry["name"] for entry in metadata["inputs"]}
     vars_list = []
     for key in sorted(input_names - SENSITIVE_KEYS):
         if key in request and request[key] is not None:
             vars_list.append({"name": key, "value": tf_value(request[key])})
 
-    vars_keys = [key for key in ("db_password", "cache_auth_token") if request.get(key) is not None]
+    vars_keys = []
+    if request.get("enable_rds", True):
+        vars_keys.append("db_password")
+    if request.get("enable_cache") and request.get("environment") == "prod":
+        vars_keys.append("cache_auth_token")
     return {
         "apiVersion": "infra.contrib.fluxcd.io/v1alpha2",
         "kind": "Terraform",
@@ -139,7 +134,7 @@ def build_terraform_cr(request: dict[str, Any]) -> dict[str, Any]:
             "interval": "10m",
             "approvePlan": "auto",
             "destroyResourcesOnDeletion": True,
-            "path": "./templates/application-stack",
+            "path": metadata["terraform_cr_source_path"],
             "sourceRef": {
                 "kind": "GitRepository",
                 "name": "score-aws-template-catalog",
@@ -168,16 +163,15 @@ def build_terraform_cr(request: dict[str, Any]) -> dict[str, Any]:
                 },
             },
             "vars": vars_list,
-            "varsFrom": [{"kind": "Secret", "name": f"secret-{guid}", "varsKeys": vars_keys}],
-            "writeOutputsToSecret": {"name": f"tf-output-{guid}", "outputs": OUTPUTS},
+            **({"varsFrom": [{"kind": "Secret", "name": request["input_secret_name"], "varsKeys": vars_keys}]} if vars_keys else {}),
+            "writeOutputsToSecret": {"name": f"tf-output-{guid}", "outputs": [entry["name"] for entry in metadata["outputs"] if not entry["sensitive"]]},
         },
     }
 
 
 def render_manifests(request: dict[str, Any]) -> str:
     validate_request(request)
-    docs = [build_secret(request), build_terraform_cr(request)]
-    return yaml.dump_all(docs, Dumper=ManifestDumper, sort_keys=False, explicit_start=True)
+    return yaml.dump(build_terraform_cr(resolved_request(request)), Dumper=ManifestDumper, sort_keys=False, explicit_start=True)
 
 
 def main() -> int:

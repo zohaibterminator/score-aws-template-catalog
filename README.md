@@ -6,7 +6,7 @@ Reusable, pinned Terraform modules for the existing Score → Flux → tofu-cont
 
 Start with [`catalog.yaml`](catalog.yaml), then the selected [`contract.yaml`](templates/application-stack/contract.yaml). The recommended Score resource is `application-stack.aws`. An agent should use [`docs/PROVISIONER_CONTRACT.md`](docs/PROVISIONER_CONTRACT.md) to write a provisioner later. This catalog does not create one automatically.
 
-A small LangChain provisioner agent lives in [`agents/provisioner-agent`](agents/provisioner-agent). It renders the input Secret and Terraform CR YAML from a request file; it does not deploy anything.
+A LangChain provisioner agent lives in [`agents/provisioner-agent`](agents/provisioner-agent). It selects components through the application stack, renders the Terraform CR, and can push it to `score-api/.score-k8s/provisioners/`. Sensitive inputs stay in a Kubernetes Secret.
 
 ## Inputs and use
 

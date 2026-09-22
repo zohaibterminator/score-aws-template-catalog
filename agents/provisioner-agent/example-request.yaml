@@ -5,8 +5,11 @@ resource_uid: application-stack.aws#orders-api.stack
 environment: dev
 plane: application
 region: us-east-1
-db_password: replace-with-score-state-password
-create_vpc: true
+input_secret_name: secret-00000000-0000-4000-8000-000000000001
+components:
+- network
+- postgres
+- object-storage
 availability_zones:
 - us-east-1a
 - us-east-1b
@@ -25,7 +28,3 @@ cache_subnet_cidrs:
 database_client_cidr_blocks:
 - 10.90.0.0/20
 cache_client_cidr_blocks: []
-enable_rds: true
-enable_s3: true
-enable_cache: false
-enable_sqs: false
