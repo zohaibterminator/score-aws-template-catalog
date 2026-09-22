@@ -9,6 +9,7 @@ import re
 import sys
 from typing import Any
 
+import jsonschema
 import yaml
 
 
@@ -73,6 +74,11 @@ def validate_request(request: dict[str, Any]) -> None:
     if set(request) & SENSITIVE_KEYS:
         raise ValueError("Do not put secret values in the request or Git. Use input_secret_name.")
     request = resolved_request(request)
+    schema = json.loads((ROOT / "schemas/application-stack-inputs.schema.json").read_text(encoding="utf-8"))
+    try:
+        jsonschema.validate(request, schema)
+    except jsonschema.ValidationError as exc:
+        raise ValueError(f"Application stack input schema: {exc.message}") from exc
     required = ["stack_name", "resource_guid", "workload", "resource_uid", "environment", "plane", "region"]
     missing = [name for name in required if not request.get(name)]
     if missing:
@@ -132,7 +138,7 @@ def build_terraform_cr(request: dict[str, Any]) -> dict[str, Any]:
         },
         "spec": {
             "interval": "10m",
-            "approvePlan": "auto",
+            "approvePlan": "",
             "destroyResourcesOnDeletion": True,
             "path": metadata["terraform_cr_source_path"],
             "sourceRef": {

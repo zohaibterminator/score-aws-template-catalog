@@ -1,6 +1,15 @@
 # Stack lifecycle and deletion runbook
 
-The input Secret has `kustomize.toolkit.fluxcd.io/prune: disabled`. Flux may remove the Terraform CR from `generated-latest`, but the Secret must remain while tofu-controller destroys AWS resources. If it is pruned first, the runner can fail with `VarsGenerationFailed`. Delete `secret-<guid>` **only after** `stack-<guid>` has disappeared and AWS verification is complete; then remove `tf-output-<guid>`. The current generated RDS manifest lacks this prune annotation even though the provisioner template has it, so inspect actual generated output before any future rollout.
+Agent policy:
+
+```agent-policy-yaml
+publish_repo: score-gp-aws-rds
+publish_file: .score-k8s/10-application-stack.provisioners.yaml
+allow_existing_provisioner_replacement: false
+allow_state_file_edits: false
+```
+
+The new Score provisioner references a pre-existing input Secret. Keep it outside the generated Git manifests; if Flux manages it separately, set `kustomize.toolkit.fluxcd.io/prune: disabled`. The Secret must remain while tofu-controller destroys AWS resources. If it disappears first, the runner can fail with `VarsGenerationFailed`. Delete the input Secret only after `stack-<guid>` has disappeared and AWS verification is complete; then remove `tf-output-<guid>`. The current generated RDS manifest lacks this prune annotation even though the old provisioner template has it, so inspect its actual output before any future rollout.
 
 Deletion order:
 

@@ -1,36 +1,24 @@
-# LangChain Provisioner Agent
+# Guarded Score provisioner agent
 
-This agent uses the `application-stack` root to provision any combination of `network`, `postgres`, `object-storage`, `cache`, and `queue`. The root keeps them in one Terraform state. The agent renders a tofu-controller Terraform manifest and can commit and push it to `score-api/.score-k8s/provisioners/`.
-
-Publishing is a live GitOps request if Flux watches that path. It can create AWS resources.
-
-## Files
-
-| File | Use |
-| --- | --- |
-| `agent.py` | LangChain tool-calling wrapper. |
-| `renderer.py` | Deterministic manifest renderer and validation. |
-| `publish.py` | Commits and pushes one manifest to `score-api`. |
-| `example-request.yaml` | Small request you can edit for testing. |
-
-## Preview
+This agent builds one Score provisioner for `application-stack.aws`. That root covers network, PostgreSQL, S3, cache, and queue. The agent reads `catalog.yaml`, all six contracts, and the policy blocks in `docs/SECURITY.md`, `docs/COMPATIBILITY.md`, and `docs/LIFECYCLE.md`.
 
 From the catalog root in PowerShell:
 
 ```powershell
-python agents/provisioner-agent/renderer.py agents/provisioner-agent/example-request.yaml
+python -m pip install -r requirements-agent.txt
+python agents/provisioner-agent/harness.py --print
 ```
 
-## Publish with LangChain
-
-Edit the request first. Set `components` to the child templates needed. Use a stable Score GUID and resource UID. If RDS is enabled, create the named Kubernetes Secret with a `db_password` key before publishing. Production cache also needs `cache_auth_token`. The Secret stays in the cluster; the request and Git contain only its name.
+That previews the provisioner without an API key. To use LangChain:
 
 ```powershell
-python -m pip install -r requirements-agent.txt
 $env:OPENAI_API_KEY = "YOUR_NEW_API_KEY"
-python agents/provisioner-agent/agent.py path/to/request.yaml --publish
+python agents/provisioner-agent/agent.py
+python agents/provisioner-agent/agent.py --publish
 ```
 
-The agent validates the request, calls the publisher tool, stages only `.score-k8s/provisioners/stack-<guid>.yaml`, commits it on `score-api/main`, and pushes to `origin/main`. The example GUID is for preview only. Git authentication and the `score-aws-template-catalog` Flux GitRepository must already work. Flux must watch the destination path for deployment.
+`--publish` pushes `10-application-stack.provisioners.yaml` to a new `agent/application-stack-*` review branch in `score-gp-aws-rds/.score-k8s`. It does not change `main`, `.score-k8s/state.yaml`, or existing provisioners. The model only chooses the preview or publish tool; it cannot edit the rendered YAML or run shell commands. The harness runs before either tool.
 
-Without `--publish`, the LangChain agent previews the same manifest. If the push fails, the commit remains local in `score-api` and the command reports the Git error.
+The provisioner references an existing Kubernetes Secret for RDS and production cache inputs. It does not put secret values in Git. The generated Terraform CR has an empty `approvePlan`, so a reviewed plan name is required before AWS changes apply. See [`docs/PROVISIONER_CONTRACT.md`](../../docs/PROVISIONER_CONTRACT.md) for the handoff.
+
+The `renderer.py` and `example-request.yaml` remain a local per-resource CR preview. They do not publish and are separate from the Score provisioner definition.

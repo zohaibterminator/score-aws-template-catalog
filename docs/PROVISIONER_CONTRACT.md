@@ -1,131 +1,21 @@
-# Blueprint for `application-stack.aws`
+# Score application stack provisioner
 
-This is an exact input/output blueprint for a later agent, not an applied provisioner. Select `application-stack` from `catalog.yaml` and read `templates/application-stack/contract.yaml`. Keep the existing Score state file and GUID behavior. Use `type: application-stack`, `class: aws`. A new resource must produce exactly one input Secret `secret-<guid>`, one Terraform CR `stack-<guid>`, and one controller-written output Secret `tf-output-<guid>` in namespace `default`.
+Agent policy:
 
-Create Score state with a stable `stackName` and reuse it on every generate. Generate `adminPassword` once in Score state when RDS is enabled, following the existing PostgreSQL provisioner pattern. Map it to the Secret key `db_password`; do not generate another password in Terraform. For a production cache, generate a distinct stable token once in Score state and map it to the sensitive Secret key `cache_auth_token`. The Secret metadata needs `k8s.score.dev/resource-uid`, `k8s.score.dev/source-workload`, `platform.company/plane`, and the annotation below:
-
-```yaml
-kustomize.toolkit.fluxcd.io/prune: disabled
+```agent-policy-yaml
+score_provisioner_uri: template://systems-limited/application-stack-aws-tofu-controller
+terraform_kind: Terraform
+secrets_mode: existing-kubernetes-secret
 ```
 
-Map Score init/params to the root variable names in the contract exactly. `vars` hold nonsecret values, including JSON-encoded lists and booleans. `varsFrom` supplies only sensitive keys. For default new-VPC mode provide all four CIDR lists and AZs; for existing-VPC mode provide VPC and subnet IDs. Include explicit database/cache client CIDRs where enabled. The existing cluster may need VPC peering, Transit Gateway, or VPN to reach private endpoints. Do not emit `0.0.0.0/0` ingress.
+The agent reads `catalog.yaml` and every `templates/*/contract.yaml`. It generates one Score `template://` provisioner for `application-stack.aws`, using `templates/application-stack` as the only Terraform CR root. The five child templates are selected by the root's `create_vpc`, `enable_rds`, `enable_s3`, `enable_cache`, and `enable_sqs` inputs.
 
-The current Flux GitRepository is `score-provisioner-modules` in `flux-system`, serving `./terraform-aws`. The new `./templates/application-stack` path requires a separate **tag-pinned** GitRepository named `score-aws-template-catalog` in the same `flux-system` namespace; do not retarget the existing object while old RDS CRs use it. Create that source as part of a later controlled integration step. The example below assumes it exists at a reviewed tag. The CR namespace remains `default`.
+The provisioner belongs in `score-gp-aws-rds/.score-k8s/10-application-stack.provisioners.yaml`. `score-k8s generate` loads it from that directory. Keep the existing PostgreSQL provisioner and `.score-k8s/state.yaml` unchanged.
 
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: secret-<guid>
-  namespace: default
-  labels:
-    platform.company/plane: application
-  annotations:
-    k8s.score.dev/resource-uid: application-stack.aws#orders-api.stack
-    k8s.score.dev/source-workload: orders-api
-    kustomize.toolkit.fluxcd.io/prune: disabled
-type: Opaque
-stringData:
-  db_password: <Score-state-adminPassword-at-render-time>
----
-apiVersion: infra.contrib.fluxcd.io/v1alpha2
-kind: Terraform
-metadata:
-  name: stack-<guid>
-  namespace: default
-  labels:
-    platform.company/plane: application
-  annotations:
-    k8s.score.dev/resource-uid: application-stack.aws#orders-api.stack
-    k8s.score.dev/source-workload: orders-api
-spec:
-  interval: 10m
-  approvePlan: auto
-  destroyResourcesOnDeletion: true
-  path: ./templates/application-stack
-  sourceRef:
-    kind: GitRepository
-    name: score-aws-template-catalog
-    namespace: flux-system
-  runnerPodTemplate:
-    metadata:
-      annotations:
-        vault.hashicorp.com/agent-inject: "true"
-        vault.hashicorp.com/role: tf-runner-role
-        vault.hashicorp.com/agent-inject-secret-aws: secret/data/score-api/aws-creds
-        vault.hashicorp.com/agent-inject-template-aws: |
-          {{- with secret "secret/data/score-api/aws-creds" -}}
-          [default]
-          aws_access_key_id={{ .Data.data.AWS_ACCESS_KEY_ID }}
-          aws_secret_access_key={{ .Data.data.AWS_SECRET_ACCESS_KEY }}
-          {{- end -}}
-    spec:
-      env:
-      - name: AWS_SHARED_CREDENTIALS_FILE
-        value: /vault/secrets/aws
-      - name: AWS_REGION
-        value: us-east-1
-  vars:
-  - name: stack_name
-    value: orders
-  - name: resource_guid
-    value: <guid>
-  - name: workload
-    value: orders-api
-  - name: environment
-    value: dev
-  - name: plane
-    value: application
-  - name: region
-    value: us-east-1
-  - name: create_vpc
-    value: "true"
-  - name: availability_zones
-    value: '["us-east-1a","us-east-1b"]'
-  - name: public_subnet_cidrs
-    value: '["10.80.0.0/24","10.80.1.0/24"]'
-  - name: private_subnet_cidrs
-    value: '["10.80.10.0/24","10.80.11.0/24"]'
-  - name: database_subnet_cidrs
-    value: '["10.80.20.0/24","10.80.21.0/24"]'
-  - name: cache_subnet_cidrs
-    value: '["10.80.30.0/24","10.80.31.0/24"]'
-  - name: database_client_cidr_blocks
-    value: '["10.90.0.0/20"]'
-  - name: enable_rds
-    value: "true"
-  - name: enable_s3
-    value: "true"
-  - name: enable_cache
-    value: "false"
-  - name: enable_sqs
-    value: "false"
-  varsFrom:
-  - kind: Secret
-    name: secret-<guid>
-    varsKeys:
-    - db_password
-  writeOutputsToSecret:
-    name: tf-output-<guid>
-    outputs:
-    - stack_name
-    - vpc_id
-    - private_subnet_ids
-    - database_subnet_ids
-    - cache_subnet_ids
-    - db_host
-    - db_port
-    - db_name
-    - db_username
-    - s3_bucket_name
-    - s3_bucket_arn
-    - cache_endpoint
-    - cache_port
-    - queue_url
-    - queue_arn
-    - dead_letter_queue_url
-```
+For each Score resource, the provisioner reuses `.Guid`, `.Uid`, and a stable `stackName` in Score state. It emits one `stack-<guid>` Terraform CR in `default`, with source `score-aws-template-catalog` in `flux-system` and path `./templates/application-stack`. Nonsecret parameters go to `vars`; sensitive values come from a pre-existing Kubernetes Secret named by `input_secret_name` through `varsFrom`. The CR writes declared nonsecret outputs to `tf-output-<guid>`. Score outputs use `encodeSecretRef` for those output keys.
 
-The example uses placeholders and no credentials. The Vault annotation template is code that runs in the cluster; it does not embed values. The current runner CR has no requests or limits, so cluster-specific resource sizing remains to be verified before integration. In a real Score template, escape the Vault `{{ ... }}` delimiters from Score's Go template, as the current provisioner does. Render and inspect the manifests before committing them.
+Create the input Secret through an approved cluster secret workflow before using RDS or production cache. It needs `db_password` for RDS and `cache_auth_token` for production cache. The agent never writes a Secret or password into Git, Score state, or the model prompt. Keep that Secret until the Terraform CR has finished destruction, as described in `LIFECYCLE.md`.
 
-For Score outputs, use `encodeSecretRef (printf "tf-output-%s" .Guid) "db_host"` and equivalent references for service endpoints/names/URLs. Use `encodeSecretRef (printf "secret-%s" .Guid) "db_password"` for the password. `db_port` and `cache_port` are numbers in Terraform but encoded as Secret data by tofu-controller; consumers that need numbers should parse the Secret string. Disabled component outputs are null and may be absent from controller-written Secret data; only expose references for enabled components. Verify null serialization with the installed controller before rollout. Do not expose the password as a Terraform output.
+The CR leaves `approvePlan` empty, so tofu-controller creates a plan and waits for a reviewed plan name before applying. The agent pushes only a review branch; merge and plan approval are separate operations. A separate, reviewed, tag-pinned Flux GitRepository must serve this catalog. Do not retarget the existing `score-provisioner-modules` source.
+
+Use `agents/provisioner-agent/harness.py` to check the catalog, all contracts, and the policy blocks in `SECURITY.md`, `COMPATIBILITY.md`, and `LIFECYCLE.md` before publishing. The harness blocks automatic plan approval, direct Kubernetes Secrets, destructive override inputs, state edits, and replacement of an existing provisioner file.

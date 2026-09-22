@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Commit and push one generated Terraform CR into score-api/.score-k8s."""
+"""Push a guarded Score provisioner to a review branch in score-gp-aws-rds."""
 from __future__ import annotations
 
 import argparse
+import hashlib
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
-from renderer import load_request, render_manifests
+from harness import check
 
 
 def git(repo: Path, *args: str) -> str:
@@ -17,44 +19,53 @@ def git(repo: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def publish(request_path: Path, score_api_repo: Path) -> Path:
-    request = load_request(request_path)
-    manifest = render_manifests(request)
-    if request["resource_guid"] == "00000000-0000-4000-8000-000000000001":
-        raise ValueError("Replace the example resource_guid before publishing.")
-    repo = score_api_repo.resolve()
-    if not repo.is_dir() or git(repo, "rev-parse", "--show-toplevel").casefold() != str(repo).replace("\\", "/").casefold():
-        raise ValueError("score_api_repo must be the root of a Git repository.")
-    if git(repo, "branch", "--show-current") != "main":
-        raise ValueError("score-api must be on main before publishing.")
-    if git(repo, "diff", "--cached", "--name-only"):
-        raise ValueError("score-api has staged changes; publish them separately first.")
-    if not git(repo, "remote", "get-url", "origin"):
-        raise ValueError("score-api has no origin remote.")
+def publish(target_repo: Path) -> str:
+    provisioner, policy = check()
+    repo = target_repo.resolve()
+    if repo.name != policy["publish_repo"] or not repo.is_dir():
+        raise ValueError(f"Target must be the {policy['publish_repo']} repository.")
+    top = git(repo, "rev-parse", "--show-toplevel")
+    if Path(top).resolve() != repo:
+        raise ValueError("Target must be the Git repository root.")
+    remote = git(repo, "remote", "get-url", "origin")
+    if not remote.replace("\\", "/").rstrip("/").removesuffix(".git").endswith("/" + policy["publish_repo"]):
+        raise ValueError("Origin does not point to the expected repository.")
 
-    relative = Path(".score-k8s") / "provisioners" / f"stack-{request['resource_guid']}.yaml"
-    target = repo / relative
-    if git(repo, "status", "--porcelain", "--", relative.as_posix()):
-        raise ValueError(f"{target} already has local changes; review them before publishing.")
-    if target.exists() and target.read_text(encoding="utf-8") == manifest:
-        git(repo, "push", "origin", "HEAD:main")
-        return target
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(manifest, encoding="utf-8", newline="\n")
-    git(repo, "add", "--", relative.as_posix())
-    git(repo, "-c", "user.name=score-provisioner-agent", "-c", "user.email=provisioner@score.local",
-        "commit", "-m", f"Add application stack {request['resource_guid']}", "--", relative.as_posix())
-    git(repo, "push", "origin", "HEAD:main")
-    return target
+    branch = policy["publish_branch_prefix"] + hashlib.sha256(provisioner.encode()).hexdigest()[:12]
+    relative = Path(policy["publish_file"])
+    git(repo, "fetch", "origin", "main")
+    if git(repo, "ls-remote", "--heads", "origin", branch):
+        return branch
+    with tempfile.TemporaryDirectory(prefix="score-provisioner-") as temp:
+        worktree = Path(temp) / "checkout"
+        git(repo, "worktree", "add", "--detach", str(worktree), "origin/main")
+        try:
+            destination = worktree / relative
+            if destination.exists() and not policy["allow_existing_provisioner_replacement"]:
+                raise ValueError(f"{relative} already exists on origin/main; review changes manually.")
+            git(worktree, "switch", "-c", branch)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(provisioner, encoding="utf-8", newline="\n")
+            git(worktree, "add", "--", relative.as_posix())
+            staged = git(worktree, "diff", "--cached", "--name-only")
+            if staged.replace("\\", "/") != relative.as_posix():
+                raise ValueError("Git staged files outside the reviewed provisioner path.")
+            git(worktree, "-c", "user.name=score-provisioner-agent", "-c", "user.email=provisioner@score.local",
+                "commit", "-m", "Add guarded application stack Score provisioner")
+            git(worktree, "push", "origin", f"HEAD:refs/heads/{branch}")
+        finally:
+            git(repo, "worktree", "remove", str(worktree))
+            if git(repo, "branch", "--list", branch):
+                git(repo, "branch", "-D", branch)
+    return branch
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("request", type=Path)
-    parser.add_argument("--score-api-repo", type=Path, default=Path(__file__).resolve().parents[3] / "score-api")
+    parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[3] / "score-gp-aws-rds")
     args = parser.parse_args()
     try:
-        print(publish(args.request, args.score_api_repo))
+        print(f"Pushed review branch: {publish(args.repo)}")
     except (ValueError, RuntimeError) as exc:
         print(exc, file=sys.stderr)
         return 1

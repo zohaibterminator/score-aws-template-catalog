@@ -2,6 +2,16 @@
 
 Inspected local `score-tf-modules`, `score-gp-aws-rds`, and `score-api` without changing their files. No `versions.tf` or `.terraform.lock.hcl` was present in those repositories. `score-tf-modules/terraform-aws/main.tf` declares Terraform `>= 1.7.0` and AWS provider `~> 5.60`; there is no exact runner binary or installed provider version recorded. This catalog validated with Terraform CLI 1.10.5 and AWS provider 5.100.0 plus random 3.9.1. It has **not** been validated with the cluster's actual OpenTofu binary.
 
+Agent policy:
+
+```agent-policy-yaml
+source_name: score-aws-template-catalog
+source_namespace: flux-system
+terraform_namespace: default
+vault_role: tf-runner-role
+vault_secret_path: secret/data/score-api/aws-creds
+```
+
 The current provisioner uses `infra.contrib.fluxcd.io/v1alpha2`, Terraform CR namespace `default` (the generated manifest omits namespace and the API deletion script queries `default`), `sourceRef.kind: GitRepository`, `sourceRef.name: score-provisioner-modules`, and `sourceRef.namespace: flux-system`. Its source path is `./terraform-aws` in the existing module repository. The current input and output Secret names are `secret-<guid>` and `tf-output-<guid>`; the CR is `rds-<guid>`. The password is created once by Score state (`adminPassword`) and passed through the input Secret's `password` key. The output Secret currently writes `host`; Score uses an encoded reference for the password in the input Secret. Existing labels and tags include `platform.company/plane`; the old module also tags `managed_by`, `resource_uid`, `environment`, and `plane`.
 
 Runner credentials are injected by Vault role `tf-runner-role` from `secret/data/score-api/aws-creds` into `/vault/secrets/aws`; `AWS_SHARED_CREDENTIALS_FILE` points there. No static key is needed in Git. The current CR contains no resource requests or limits. The cluster's actual resource admission requirements and runner OpenTofu version were not discoverable from local files; verify them before rollout. Terraform state uses tofu-controller's Kubernetes backend and destruction is enabled with `destroyResourcesOnDeletion: true`.

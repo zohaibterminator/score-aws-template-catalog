@@ -2,10 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.invalid/score-aws-template-catalog/application-stack-inputs.schema.json",
   "type": "object",
-  "required": ["stack_name", "resource_guid", "workload", "environment", "plane", "region"],
+  "required": ["stack_name", "resource_guid", "resource_uid", "workload", "environment", "plane", "region"],
   "properties": {
     "stack_name": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,38}[a-z0-9]$"},
     "resource_guid": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+    "resource_uid": {"type": "string", "minLength": 1},
+    "input_secret_name": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
+    "components": {"type": "array", "uniqueItems": true, "items": {"enum": ["network", "postgres", "object-storage", "cache", "queue"]}},
     "workload": {"type": "string", "minLength": 1},
     "environment": {"enum": ["dev", "staging", "uat", "dr", "prod"]},
     "plane": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$"},
@@ -32,14 +35,12 @@
     "enable_sqs": {"type": "boolean"},
     "db_name": {"type": "string"},
     "db_username": {"type": "string"},
-    "db_password": {"type": "string", "minLength": 1, "writeOnly": true},
     "db_instance_class": {"type": "string", "pattern": "^db\\.[a-z0-9]+\\.[a-z0-9]+$"},
     "db_allocated_storage": {"type": "number", "minimum": 20},
     "db_engine_version": {"type": "string"},
     "cache_engine": {"enum": ["redis", "valkey"]},
     "cache_engine_version": {"type": "string"},
     "cache_node_type": {"type": "string", "pattern": "^cache\\.[a-z0-9]+\\.[a-z0-9]+$"},
-    "cache_auth_token": {"type": "string", "writeOnly": true},
     "allow_prod_destroy": {"type": "boolean"},
     "allow_nonprod_bucket_force_destroy": {"type": "boolean"},
     "extra_tags": {"type": "object", "additionalProperties": {"type": "string"}}
@@ -49,9 +50,9 @@
   },
   "allOf": [
     {"if": {"properties": {"create_vpc": {"const": false}}, "required": ["create_vpc"]}, "then": {"required": ["existing_vpc_id", "existing_private_subnet_ids", "existing_database_subnet_ids", "existing_cache_subnet_ids"]}, "else": {"required": ["availability_zones", "public_subnet_cidrs", "private_subnet_cidrs", "database_subnet_cidrs", "cache_subnet_cidrs"]}},
-    {"if": {"properties": {"enable_rds": {"const": true}}}, "then": {"required": ["db_password", "database_client_cidr_blocks"]}},
+    {"if": {"properties": {"enable_rds": {"const": true}}}, "then": {"required": ["input_secret_name", "database_client_cidr_blocks"]}},
     {"if": {"properties": {"enable_cache": {"const": true}}, "required": ["enable_cache"]}, "then": {"required": ["cache_client_cidr_blocks"]}},
-    {"if": {"properties": {"environment": {"const": "prod"}, "enable_cache": {"const": true}}, "required": ["environment", "enable_cache"]}, "then": {"required": ["cache_auth_token"]}}
+    {"if": {"properties": {"environment": {"const": "prod"}, "enable_cache": {"const": true}}, "required": ["environment", "enable_cache"]}, "then": {"required": ["input_secret_name"]}}
   ],
   "additionalProperties": false
 }

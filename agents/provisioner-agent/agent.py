@@ -1,76 +1,62 @@
 #!/usr/bin/env python3
-"""LangChain agent for previewing or publishing application-stack manifests."""
+"""LangChain wrapper around the guarded Score provisioner workflow."""
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 import sys
 
-from renderer import load_request, render_manifests
+from harness import check
 from publish import publish
 
 
-SYSTEM_PROMPT = """You are a provisioner agent for score-aws-template-catalog.
-Use the provided tool exactly once for the requested action. The deterministic renderer
-selects child templates and owns validation. Never invent credentials or change YAML.
-Return the tool result."""
-
-
-def run_agent(request_path: Path, score_api_repo: Path, do_publish: bool = False) -> str:
+def run_agent(repo: Path, do_publish: bool = False) -> str:
+    rendered, _ = check()  # Deterministic gate runs before the model or Git.
     try:
         from langchain.agents import AgentExecutor, create_tool_calling_agent
         from langchain_core.prompts import ChatPromptTemplate
         from langchain_core.tools import tool
         from langchain_openai import ChatOpenAI
     except ImportError as exc:
-        raise SystemExit(
-            "LangChain dependencies are missing. Install them with: "
-            "pip install -r requirements-agent.txt"
-        ) from exc
+        raise SystemExit("Install the dependencies with: python -m pip install -r requirements-agent.txt") from exc
 
-    request = load_request(request_path)
-    render_manifests(request)  # Validate locally before any model call or Git write.
     called = False
 
     @tool(return_direct=True)
-    def render_application_stack_manifests() -> str:
-        """Preview the Terraform CR for the selected application-stack components."""
+    def preview_score_provisioner() -> str:
+        """Preview the contract-checked Score application-stack provisioner YAML."""
         nonlocal called
         called = True
-        return render_manifests(request)
+        return rendered
 
     @tool(return_direct=True)
-    def publish_application_stack_manifests() -> str:
-        """Commit and push the Terraform CR to score-api/.score-k8s/provisioners."""
+    def publish_score_provisioner() -> str:
+        """Push the guarded Score provisioner to a review branch in score-gp-aws-rds."""
         nonlocal called
         called = True
-        return f"Published {publish(request_path, score_api_repo)}"
+        return f"Pushed review branch: {publish(repo)}"
 
     llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0)
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", SYSTEM_PROMPT),
-            ("human", "{action} the application-stack provisioner for these components: {components}."),
-            ("placeholder", "{agent_scratchpad}"),
-        ]
-    )
-    tools = [publish_application_stack_manifests] if do_publish else [render_application_stack_manifests]
-    agent = create_tool_calling_agent(llm, tools, prompt)
-    executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
-    result = executor.invoke({"action": "Publish" if do_publish else "Preview", "components": request.get("components", "request flags")})
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "Call the one provided tool exactly once. Do not invent manifests, run shell commands, or access AWS or Kubernetes. Return the tool result."),
+        ("human", "{action} the Score application-stack provisioner."),
+        ("placeholder", "{agent_scratchpad}"),
+    ])
+    tool = publish_score_provisioner if do_publish else preview_score_provisioner
+    executor = AgentExecutor(agent=create_tool_calling_agent(llm, [tool], prompt), tools=[tool], verbose=False)
+    result = executor.invoke({"action": "Publish to a review branch" if do_publish else "Preview"})
     if not called:
-        raise RuntimeError("The model did not call the provisioner tool.")
+        raise RuntimeError("The model did not call the guarded provisioner tool.")
     return str(result["output"])
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("request", type=Path)
     parser.add_argument("--publish", action="store_true")
-    parser.add_argument("--score-api-repo", type=Path, default=Path(__file__).resolve().parents[3] / "score-api")
+    parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[3] / "score-gp-aws-rds")
     args = parser.parse_args()
     try:
-        print(run_agent(args.request, args.score_api_repo, args.publish))
+        print(run_agent(args.repo, args.publish))
     except (ValueError, RuntimeError) as exc:
         print(exc, file=sys.stderr)
         return 1

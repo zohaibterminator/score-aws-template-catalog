@@ -1,8 +1,18 @@
 # Security
 
+Agent policy (read by `agents/provisioner-agent/harness.py`):
+
+```agent-policy-yaml
+forbidden_request_fields: [db_password, cache_auth_token]
+forbidden_manifest_kinds: [Secret]
+approve_plan: ""
+publish_branch_prefix: agent/application-stack-
+forbidden_terraform_inputs: [allow_prod_destroy, allow_nonprod_bucket_force_destroy]
+```
+
 No static AWS access keys, IAM users, or IAM access keys are created. The current Vault injector writes temporary runner credentials from role `tf-runner-role` to `/vault/secrets/aws`; the new provisioner should preserve that pattern and scope the runner identity to this stack's resources. Prefer short-lived credentials if the platform later supports them. Do not place secret values in Git, contracts, catalog entries, examples, test fixtures, logs, or Terraform variable files.
 
-RDS and ElastiCache live in private subnets and use restricted security groups. RDS storage and cache storage are encrypted; ElastiCache transit encryption is enabled. S3 has all public-access block switches, SSE-S3, versioning, and a TLS-only bucket policy. SQS and its DLQ use SQS-managed encryption. The Score database password is a sensitive Terraform variable and remains in the input Kubernetes Secret and Terraform state; it is not an output. The cache auth token is sensitive and required in production. Protect the Kubernetes backend state and output Secret with namespace RBAC and backup encryption. The output Secret contains endpoints, resource names, and topology information, which should still be access controlled.
+RDS and ElastiCache live in private subnets and use restricted security groups. RDS storage and cache storage are encrypted; ElastiCache transit encryption is enabled. S3 has all public-access block switches, SSE-S3, versioning, and a TLS-only bucket policy. SQS and its DLQ use SQS-managed encryption. The new provisioner references a pre-existing input Kubernetes Secret for the database password and production cache token; it does not write their values to Score state or Git. Terraform state still contains sensitive values and requires namespace RBAC and encrypted backups. The output Secret contains endpoints, resource names, and topology information, which should still be access controlled.
 
 Production RDS uses deletion protection, Multi-AZ, backups, and a final snapshot. Production S3 force destroy is disabled. A reviewed, staged teardown must turn off RDS protection before CR deletion and handle S3 object versions. Keep the prune-protected input Secret until the Terraform CR has disappeared; delete it afterwards.
 
