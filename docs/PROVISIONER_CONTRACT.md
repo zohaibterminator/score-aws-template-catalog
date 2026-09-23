@@ -10,7 +10,7 @@ secrets_mode: existing-kubernetes-secret
 
 The agent reads `catalog.yaml` and every `templates/*/contract.yaml`. It generates one Score `template://` provisioner for `application-stack.aws`, using `templates/application-stack` as the only Terraform CR root. The five child templates are selected by the root's `create_vpc`, `enable_rds`, `enable_s3`, `enable_cache`, and `enable_sqs` inputs.
 
-The provisioner belongs in `score-gp-aws-rds/.score-k8s/10-application-stack.provisioners.yaml`. `score-k8s generate` loads it from that directory. Keep the existing PostgreSQL provisioner and `.score-k8s/state.yaml` unchanged.
+The provisioner belongs in `application-stack/.score-k8s/10-application-stack.provisioners.yaml`. `score-k8s generate` loads it from that directory. Keep any existing `.score-k8s/state.yaml` unchanged.
 
 For each Score resource, the provisioner reuses `.Guid`, `.Uid`, and a stable `stackName` in Score state. It emits one `stack-<guid>` Terraform CR in `default`, with source `score-aws-template-catalog` in `flux-system` and path `./templates/application-stack`. Nonsecret parameters go to `vars`; sensitive values come from a pre-existing Kubernetes Secret named by `input_secret_name` through `varsFrom`. The CR writes declared nonsecret outputs to `tf-output-<guid>`. Score outputs use `encodeSecretRef` for those output keys.
 

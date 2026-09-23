@@ -37,7 +37,7 @@ def run_agent(repo: Path, do_publish: bool = False, approval: str | None = None)
 
     @tool(return_direct=True)
     def publish_score_provisioner() -> str:
-        """Push the guarded Score provisioner to a review branch in score-gp-aws-rds."""
+        """Push the guarded Score provisioner to a review branch in application-stack."""
         nonlocal called
         called = True
         return f"Pushed review branch: {publish(repo, approval or '')}"
@@ -60,7 +60,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--publish", action="store_true")
     parser.add_argument("--approval", help="Approval code printed by the preview command")
-    parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[3] / "score-gp-aws-rds")
+    parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[3] / "application-stack")
     args = parser.parse_args()
     try:
         print(run_agent(args.repo, args.publish, args.approval))

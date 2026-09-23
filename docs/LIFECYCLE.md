@@ -3,7 +3,7 @@
 Agent policy:
 
 ```agent-policy-yaml
-publish_repo: score-gp-aws-rds
+publish_repo: application-stack
 publish_file: .score-k8s/10-application-stack.provisioners.yaml
 allow_existing_provisioner_replacement: false
 allow_state_file_edits: false
