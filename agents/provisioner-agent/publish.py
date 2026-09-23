@@ -19,8 +19,19 @@ def git(repo: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def publish(target_repo: Path) -> str:
+def approval_code(provisioner: str) -> str:
+    """Return the review code for the exact provisioner content."""
+    return hashlib.sha256(provisioner.encode()).hexdigest()[:12]
+
+
+def publish(target_repo: Path, approval: str) -> str:
     provisioner, policy = check()
+    expected_approval = approval_code(provisioner)
+    if approval != expected_approval:
+        raise ValueError(
+            "Human approval does not match the generated provisioner. "
+            f"Review it again and approve code {expected_approval}."
+        )
     repo = target_repo.resolve()
     if repo.name != policy["publish_repo"] or not repo.is_dir():
         raise ValueError(f"Target must be the {policy['publish_repo']} repository.")
@@ -31,7 +42,7 @@ def publish(target_repo: Path) -> str:
     if not remote.replace("\\", "/").rstrip("/").removesuffix(".git").endswith("/" + policy["publish_repo"]):
         raise ValueError("Origin does not point to the expected repository.")
 
-    branch = policy["publish_branch_prefix"] + hashlib.sha256(provisioner.encode()).hexdigest()[:12]
+    branch = policy["publish_branch_prefix"] + expected_approval
     relative = Path(policy["publish_file"])
     git(repo, "fetch", "origin", "main")
     if git(repo, "ls-remote", "--heads", "origin", branch):
@@ -63,9 +74,10 @@ def publish(target_repo: Path) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[3] / "score-gp-aws-rds")
+    parser.add_argument("--approval", required=True, help="Approval code printed by the preview command")
     args = parser.parse_args()
     try:
-        print(f"Pushed review branch: {publish(args.repo)}")
+        print(f"Pushed review branch: {publish(args.repo, args.approval)}")
     except (ValueError, RuntimeError) as exc:
         print(exc, file=sys.stderr)
         return 1
