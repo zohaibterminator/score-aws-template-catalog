@@ -1,0 +1,198 @@
+# Score capability agent: everything needed to run it, in one manifest.
+#
+#   kubectl apply -f capability-agent.yaml        (or Rancher: Import YAML, namespace default)
+#
+# Exposed at https://score-capability-agent.apps.ai.cdis.systemsltd.local (port 443, nginx-custom),
+# reachable from other clusters the same way score-api is.
+#
+# Secrets come from Vault (KV v2), injected by the Vault Agent as files under /vault/secrets/:
+#   Vault path   : secret/capability-agent/config      (CLI / UI path)
+#                  secret/data/capability-agent/config (API / policy / annotation path)
+#   Keys         : a2a_token, anthropic_api_key, git_token
+#   Vault role   : capability-agent-role  (bound to ServiceAccount score-capability-agent in default)
+# To use a different path, change the three "agent-inject-secret-*" and "agent-inject-template-*"
+# annotation pairs below; the agent itself only reads the files.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: score-capability-agent
+  namespace: default
+# No Role/RoleBinding: the agent never calls the Kubernetes API. The token is mounted only for Vault login.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: score-capability-agent
+  namespace: default
+  labels:
+    app: score-capability-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: score-capability-agent
+  template:
+    metadata:
+      labels:
+        app: score-capability-agent
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: capability-agent-role
+        vault.hashicorp.com/agent-inject-secret-a2a-token: secret/data/capability-agent/config
+        vault.hashicorp.com/agent-inject-template-a2a-token: '{{- with secret "secret/data/capability-agent/config" -}}{{ .Data.data.a2a_token }}{{- end -}}'
+        vault.hashicorp.com/agent-inject-secret-anthropic-api-key: secret/data/capability-agent/config
+        vault.hashicorp.com/agent-inject-template-anthropic-api-key: '{{- with secret "secret/data/capability-agent/config" -}}{{ .Data.data.anthropic_api_key }}{{- end -}}'
+        vault.hashicorp.com/agent-inject-secret-git-token: secret/data/capability-agent/config
+        vault.hashicorp.com/agent-inject-template-git-token: '{{- with secret "secret/data/capability-agent/config" -}}{{ .Data.data.git_token }}{{- end -}}'
+    spec:
+      serviceAccountName: score-capability-agent
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: agent
+        image: docker.io/abdurrahman126/score-capability-agent:0.1.0
+        imagePullPolicy: Always       # re-pull when an image tag is rebuilt; switch to IfNotPresent once tags are immutable
+        ports:
+        - name: http
+          containerPort: 8080
+        env:
+        - name: MODULE_REPO
+          value: https://github.com/zohaibterminator/score-tf-modules.git
+        - name: MODULE_REF
+          value: main            # pin to a reviewed tag (e.g. v1.1.0) for production
+        - name: SCORE_REPO
+          value: https://github.com/zohaibterminator/score-gp-aws-rds.git
+        - name: SCORE_REF
+          value: main
+        - name: PUBLIC_URL       # advertised in the Agent Card; A2A clients connect to this URL
+          value: https://score-capability-agent.apps.ai.cdis.systemsltd.local/
+        - name: GIT_CHECK_SECONDS
+          value: "60"            # how often a request may check Git for a new commit (then the agent re-crawls)
+        - name: ANTHROPIC_MODEL
+          value: claude-opus-5
+        - name: A2A_AUTH_TOKEN_FILE
+          value: /vault/secrets/a2a-token
+        - name: ANTHROPIC_API_KEY_FILE
+          value: /vault/secrets/anthropic-api-key
+        - name: GIT_TOKEN_FILE
+          value: /vault/secrets/git-token
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: http
+          periodSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 20
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 3
+          failureThreshold: 20
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 768Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir:
+          sizeLimit: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: score-capability-agent
+  namespace: default
+spec:
+  type: ClusterIP
+  selector:
+    app: score-capability-agent
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+---
+# TLS: cert-manager self-signed issuer (internal .local host, no public ACME), same as score-api.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: score-capability-agent-selfsigned
+  namespace: default
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: score-capability-agent-tls
+  namespace: default
+spec:
+  secretName: score-capability-agent-tls
+  duration: 8760h
+  renewBefore: 720h
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  issuerRef:
+    name: score-capability-agent-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+  commonName: score-capability-agent.apps.ai.cdis.systemsltd.local
+  dnsNames:
+    - score-capability-agent.apps.ai.cdis.systemsltd.local
+---
+# HTTPS on 443 through the nginx-custom controller (ingress node 192.168.76.25). Callers in other
+# clusters must resolve the hostname to that node (DNS record, or hostAliases in their pods).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: score-capability-agent
+  namespace: default
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    # The first request after a new commit waits for Claude to re-crawl the repositories.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
+    # To allow only the calling clusters, list their egress CIDRs (comma-separated):
+    # nginx.ingress.kubernetes.io/whitelist-source-range: "192.168.76.0/24,<other-cluster-cidr>"
+spec:
+  ingressClassName: nginx-custom
+  tls:
+    - hosts:
+        - score-capability-agent.apps.ai.cdis.systemsltd.local
+      secretName: score-capability-agent-tls
+  rules:
+    - host: score-capability-agent.apps.ai.cdis.systemsltd.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: score-capability-agent
+                port:
+                  number: 80

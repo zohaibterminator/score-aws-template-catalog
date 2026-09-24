@@ -26,4 +26,12 @@ The approval code is a SHA-256 digest of the exact provisioner. A content change
 
 The provisioner references an existing Kubernetes Secret for RDS and production cache inputs. It does not put secret values in Git. The generated Terraform CR has an empty `approvePlan`, so a reviewed plan name is required before AWS changes apply. See [`docs/PROVISIONER_CONTRACT.md`](../../docs/PROVISIONER_CONTRACT.md) for the handoff.
 
+To have the agent discover current deployable capabilities from Git repositories, run:
+
+```powershell
+python agents/provisioner-agent/agent.py --capabilities
+```
+
+That runs the [capability agent](../capability-agent/README.md) without the LLM, against the committed state of the sibling `score-tf-modules` and `score-gp-aws-rds` repos. It reports which Terraform variables a `score.yaml` can set and which are fixed by the platform. Today the extracted capability is `postgres.aws-terraform`, backed by `aws_db_instance`, which deploys an Amazon RDS PostgreSQL instance. For LLM descriptions, a remote Git URL or a specific tag, run the capability agent directly.
+
 The `renderer.py` and `example-request.yaml` remain a local per-resource CR preview. They do not publish and are separate from the Score provisioner definition.

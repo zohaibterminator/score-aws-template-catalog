@@ -22,6 +22,8 @@ done
 python "$ROOT/scripts/validate-contracts.py"
 python "$ROOT/scripts/test-catalog.py"
 python "$ROOT/scripts/test-console.py" "$TF"
+python "$ROOT/scripts/test-capability-agent.py"
+python "$ROOT/scripts/test-capability-a2a.py"
 if command -v tflint >/dev/null 2>&1; then
   for template in network postgres object-storage cache queue application-stack; do
     tflint --chdir "$ROOT/templates/$template"

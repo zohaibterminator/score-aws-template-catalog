@@ -59,9 +59,15 @@ def run_agent(repo: Path, do_publish: bool = False, approval: str | None = None)
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--publish", action="store_true")
+    parser.add_argument("--capabilities", action="store_true", help="Extract deployable capabilities from Score and Terraform repos")
     parser.add_argument("--approval", help="Approval code printed by the preview command")
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[3] / "score-gp-aws-rds")
+    parser.add_argument("--module-repo", type=Path, default=Path(__file__).resolve().parents[3] / "score-tf-modules")
     args = parser.parse_args()
+    if args.capabilities:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "capability-agent"))
+        from capability_agent import main as capabilities_main
+        return capabilities_main(["--no-llm", "--module-repo", str(args.module_repo), "--score-repo", str(args.repo)])
     try:
         print(run_agent(args.repo, args.publish, args.approval))
     except (ValueError, RuntimeError) as exc:
