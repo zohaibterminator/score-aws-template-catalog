@@ -36,7 +36,7 @@ The `.terraform/` folders are **downloaded module caches** created by `terraform
 
 1. Choose `examples/minimal`, `examples/complete`, or `examples/existing-vpc`. Set a stable `stack_name`, Score GUID, workload, environment, plane, and AWS region.
 2. For a new VPC, provide two or more AZs and public, private, database, and cache subnet CIDRs. For an existing VPC, provide its ID and subnet IDs. Supply **routable, restricted client CIDRs** for enabled database/cache access. The Kubernetes cluster may need peering, Transit Gateway, or VPN to reach those private endpoints.
-3. Run the agent in `agents/provisioner-agent`. It reads the catalog, all six contracts, and the policy docs, then pushes a Score provisioner to a review branch in `application-stack`. Supply a pre-existing Kubernetes Secret by name for RDS and production cache. Keep secret values out of Git.
+3. Run the agent in `agents/provisioner-agent`. It reads the catalog, all six contracts, and the policy docs, then pushes a Score provisioner to a review branch in `score-gp-aws-rds/.score-k8s`. Supply a pre-existing Kubernetes Secret by name for RDS and production cache. Keep secret values out of Git.
 4. Create a separate, tag-pinned Flux GitRepository for this catalog. Keep the old `score-provisioner-modules` source for existing RDS CRs. Render and review the new manifests before using Flux.
 
 ## Check and operate

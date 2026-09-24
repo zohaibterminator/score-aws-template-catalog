@@ -53,7 +53,7 @@ def check() -> tuple[str, dict[str, Any]]:
         raise ValueError("Root dependencies differ from catalog children.")
     if root["direct_terraform_cr_root"] is not True:
         raise ValueError("Application stack is no longer a direct Terraform root.")
-    if policy["publish_repo"] != "application-stack" or not policy["publish_file"].startswith(".score-k8s/"):
+    if policy["publish_repo"] != "score-gp-aws-rds" or not policy["publish_file"].startswith(".score-k8s/"):
         raise ValueError("Publishing destination changed outside reviewed policy.")
     if policy["allow_existing_provisioner_replacement"] is not False or policy["allow_state_file_edits"] is not False:
         raise ValueError("Lifecycle policy would allow unsafe replacement or state edits.")

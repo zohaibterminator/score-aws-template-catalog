@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Push a guarded Score provisioner to a review branch in application-stack."""
+"""Push a guarded Score provisioner to a review branch in score-gp-aws-rds."""
 from __future__ import annotations
 
 import argparse
@@ -74,7 +74,7 @@ def publish(target_repo: Path, approval: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[3] / "application-stack")
+    parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[3] / "score-gp-aws-rds")
     parser.add_argument("--approval", required=True, help="Approval code printed by the preview command")
     args = parser.parse_args()
     try:
