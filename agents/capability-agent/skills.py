@@ -51,12 +51,66 @@ def _json_schema_type(tf_type: str) -> str | None:
             "tuple": "array", "map": "object", "object": "object"}.get(base)
 
 
-def tool_manifest(report: dict[str, Any], platform: str = "valueops", agent: str = "infra") -> dict[str, Any]:
-    """Each Score capability as a discoverable tool whose inputSchema is the score.yaml params it accepts."""
+def _tool_name(capability: dict[str, Any], entry: dict[str, Any] | None) -> tuple[str, str]:
+    provider = _slug(entry["score_class"]) if entry else "terraform"
+    return provider, f"provision_{_slug(entry['score_type'] if entry else capability['id'])}"
+
+
+# score-api builds a score.yaml around a PostgreSQL resource, so only that capability can be executed.
+EXECUTABLE_SCORE_TYPES = {"postgres"}
+WORKLOAD_SCHEMA = {"type": "string", "pattern": "^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$",
+                   "description": "Score workload name (metadata.name): lowercase letters, digits and hyphens, "
+                                  "2-40 characters. Requests for the same workload update its database."}
+IMAGE_SCHEMA = {"type": "string", "pattern": "^[A-Za-z0-9._/:@-]+$",
+                "description": "Container image of the workload, e.g. nginx:latest."}
+REGIONS = ["us-east-1", "us-east-2", "us-west-1", "us-west-2"]
+
+
+def _action_tools(agent: str) -> list[dict[str, Any]]:
+    """score-api operations that are not derived from Terraform: rotating AWS credentials and deleting everything."""
+    return [
+        {
+            "agent": agent, "provider": "score_api", "name": "update_aws_credentials",
+            "id": f"{agent}.score_api.update_aws_credentials",
+            "description": "Rotates the AWS credentials that Terraform uses to provision resources: writes them to "
+                           "Vault and re-reconciles every live Terraform resource with the new credentials.",
+            "inputSchema": {"type": "object", "properties": {
+                "access_key_id": {"type": "string", "pattern": "^[A-Z0-9]{16,32}$",
+                                  "description": "AWS access key ID."},
+                "secret_access_key": {"type": "string", "description": "AWS secret access key."},
+                "region": {"type": "string", "enum": REGIONS, "default": "us-east-1",
+                           "description": "Default AWS region stored with the credentials."},
+            }, "required": ["access_key_id", "secret_access_key"], "additionalProperties": False},
+            "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True,
+                            "openWorldHint": True},
+        },
+        {
+            "agent": agent, "provider": "score_api", "name": "delete_all_resources",
+            "id": f"{agent}.score_api.delete_all_resources",
+            "description": "Destroys every provisioned workload database: removes the Terraform resources, deletes "
+                           "the RDS instances in AWS and cleans up their Secrets. Without confirm it only reports "
+                           "what would be deleted. Takes 5-20 minutes; send it with returnImmediately and poll "
+                           "GetTask.",
+            "inputSchema": {"type": "object", "properties": {
+                "confirm": {"type": "string", "enum": ["DELETE-ALL"],
+                            "description": 'Set to "DELETE-ALL" to delete. Leave it out for a dry run.'},
+            }, "required": [], "additionalProperties": False},
+            "annotations": {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True,
+                            "openWorldHint": True},
+        },
+    ]
+
+
+def tool_manifest(report: dict[str, Any], platform: str = "valueops", agent: str = "infra",
+                  actions: bool = False) -> dict[str, Any]:
+    """Each Score capability as a discoverable tool whose inputSchema is the score.yaml params it accepts.
+
+    actions: the agent can execute tools through score-api, so provision tools also take the workload and image,
+    and the score-api operations are listed too.
+    """
     tools = []
     for capability, entry in _entrypoints(report):
-        provider = _slug(entry["score_class"]) if entry else "terraform"
-        name = f"provision_{_slug(entry['score_type'] if entry else capability['id'])}"
+        provider, name = _tool_name(capability, entry)
         by_variable = {p["terraform_variable"]: p for p in capability["parameters"]}
         properties: dict[str, Any] = {}
         required = []
@@ -76,6 +130,9 @@ def tool_manifest(report: dict[str, Any], platform: str = "valueops", agent: str
             else:
                 schema["default"] = param["default"]
             properties[param["name"]] = schema
+        if actions and entry and entry["score_type"] in EXECUTABLE_SCORE_TYPES:
+            properties = {"workload": WORKLOAD_SCHEMA, "image": IMAGE_SCHEMA, **properties}
+            required = ["workload", "image", *required]
         tools.append({
             "agent": agent,
             "provider": provider,
@@ -88,6 +145,8 @@ def tool_manifest(report: dict[str, Any], platform: str = "valueops", agent: str
             "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True,
                             "openWorldHint": True},
         })
+    if actions:
+        tools.extend(_action_tools(agent))
     digest = hashlib.sha256(json.dumps(tools, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return {"provider": platform, "discoveryMode": "agent-discovery-live", "manifestDigest": f"sha256:{digest}",
             "tools": tools}
@@ -263,3 +322,38 @@ def check_request(report: dict[str, Any], request: dict[str, Any]) -> dict[str, 
     if entry:
         result["score_resource"] = {"type": entry["score_type"], "class": entry["score_class"], "params": developer_params}
     return result
+
+
+def prepare_provision(report: dict[str, Any], tool_id: str, arguments: dict[str, Any],
+                      agent: str = "infra") -> dict[str, Any]:
+    """Validate a provision tool call against the crawled capability before anything is sent to score-api.
+
+    Returns {"verdict": "accepted", "workload", "image", "params"} with defaults filled in from the manifest, or
+    {"verdict": "rejected" | "unsupported", "issues": [...]}.
+    """
+    for capability, entry in _entrypoints(report):
+        provider, name = _tool_name(capability, entry)
+        if f"{agent}.{provider}.{name}" == tool_id:
+            break
+    else:
+        return {"verdict": "unsupported", "issues": [{"field": "tool", "problem": f"no tool {tool_id!r}"}]}
+    if not entry or entry["score_type"] not in EXECUTABLE_SCORE_TYPES:
+        return {"verdict": "unsupported", "issues": [
+            {"field": "tool", "problem": f"{tool_id} is listed but score-api cannot provision it yet"}]}
+
+    arguments = dict(arguments)
+    workload, image = arguments.pop("workload", None), arguments.pop("image", None)
+    issues = []
+    for field, value, schema in (("workload", workload, WORKLOAD_SCHEMA), ("image", image, IMAGE_SCHEMA)):
+        if not value:
+            issues.append({"field": field, "problem": "required"})
+        elif not isinstance(value, str) or not re.match(schema["pattern"], value):
+            issues.append({"field": field, "problem": f"must match {schema['pattern']}"})
+    check = check_request(report, {"score_type": entry["score_type"], "score_class": entry["score_class"],
+                                   "params": arguments})
+    issues += check["issues"]
+    if issues:
+        return {"verdict": "rejected", "issues": issues, "source_commit": check.get("source_commit")}
+    return {"verdict": "accepted", "workload": workload, "image": image,
+            "params": check["score_resource"]["params"], "applied_defaults": check["applied_defaults"],
+            "source_commit": check["source_commit"]}

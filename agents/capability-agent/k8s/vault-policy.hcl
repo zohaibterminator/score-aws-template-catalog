@@ -8,3 +8,8 @@
 path "secret/data/capability-agent/config" {
   capabilities = ["read"]
 }
+
+# score-api's shared secret (key shared_secret), sent as X-App-Secret when the agent executes tools.
+path "secret/data/score-api/app-secret" {
+  capabilities = ["read"]
+}

@@ -53,6 +53,25 @@ Discovery: `GET /.well-known/agent-card.json` (no auth). All other calls use JSO
 
 It only enforces limits that are written in the repos. For example, the 20 GB free-tier cap is enforced only once `score-tf-modules` has a `validation` block for `storage_gb`.
 
+### Executing tools through score-api
+
+When `SCORE_API_SECRET` is set, the manifest also lists what the agent can execute, and callers run a tool with:
+
+```json
+{"skill": "call_tool", "tool": "<tool id>", "arguments": {...}}
+```
+
+| Tool id | score-api endpoint | Arguments | Reply |
+| --- | --- | --- | --- |
+| `infra.aws_terraform.provision_postgres` | `/cgi-bin/score` | `workload`, `image` (required), plus any params from the `inputSchema` | Task. Artifact `score-api-response` has `run_id` and `guid`. |
+| `infra.score_api.update_aws_credentials` | `/cgi-bin/update-aws-creds` | `access_key_id`, `secret_access_key`, `region` | Message (not a task, so the credentials are never kept in the task store) |
+| `infra.score_api.delete_all_resources` | `/cgi-bin/delete-all` | `confirm: "DELETE-ALL"`; leave it out for a dry run | Task. Takes 5-20 minutes. |
+
+- **Validation before the call:** provision requests go through `check_request` first, and the workload and image formats are checked too. The manifest defaults are then filled in, so the resource matches what the manifest advertised. A rejected request never reaches score-api.
+- **Task states:** a task ends `TASK_STATE_COMPLETED` when score-api answers `ok`, `partial` or `dry_run`. It ends `TASK_STATE_FAILED` when score-api answers `error` or can't be reached. The status message says which stage failed.
+- **Long calls:** by default `SendMessage` waits for the task to finish. For delete-all, send `"configuration": {"returnImmediately": true}` and poll `GetTask` with `{"id": "<task id>"}`, because the agent's ingress closes requests after 300 s. The agent itself calls score-api through its in-cluster Service, so its own call is not cut off.
+- **Plain text:** a plain-text request never executes anything. Claude checks the request and replies with the `call_tool` payload to send.
+
 ## Files
 
 | File | Role |
@@ -63,7 +82,8 @@ It only enforces limits that are written in the repos. For example, the 20 GB fr
 | `qa.py` | The Claude agent that answers free-text questions using `list_capabilities` / `check_request` / file tools |
 | `report.py` | Builds the facts and merges the agent's output, dropping anything ungrounded |
 | `terraform_facts.py`, `score_bindings.py` | Parsers the agent uses as tools (Terraform via `python-hcl2`, Score provisioners) |
-| `skills.py`, `hcl_eval.py` | `list_capabilities` and `check_request`, plus the evaluator for Terraform conditions |
+| `skills.py`, `hcl_eval.py` | `list_capabilities`, `check_request`, the tool manifest and provision validation, plus the evaluator for Terraform conditions |
+| `score_api.py` | Client for the score-api endpoints (`X-App-Secret` auth) |
 | `git_source.py` | Clones at a ref, `ls-remote`, token auth |
 
 ## Configuration
@@ -78,6 +98,9 @@ It only enforces limits that are written in the repos. For example, the 20 GB fr
 | `GIT_CHECK_SECONDS` | `60` | How often requests may check Git for a new commit |
 | `MANIFEST_PROVIDER` / `MANIFEST_AGENT` | `valueops` / `infra` | Top-level `provider` and each tool's `agent` in the manifest |
 | `GIT_TOKEN` or `GIT_TOKEN_FILE`, `GIT_USER`, `GIT_TOKEN_HOST` | unset, `x-access-token`, `https://github.com/` | Private repo access. Sent as an HTTP header through Git's environment config, never on the command line. |
+| `SCORE_API_SECRET` or `SCORE_API_SECRET_FILE` | unset | score-api's shared secret, sent as `X-App-Secret`. Without it the agent lists capabilities but cannot execute them. |
+| `SCORE_API_URL` | `http://score-api.default.svc.cluster.local` | score-api base URL. Use the in-cluster Service: score-api's ingress times out after 120 s. |
+| `SCORE_API_TIMEOUT` / `SCORE_API_INSECURE` | `1500` / unset | Seconds to wait for score-api (delete-all takes up to 20 minutes); `true` skips TLS verification for an `https` URL |
 | `PUBLIC_URL`, `PORT`, `CHECKOUT_DIR`, `LOG_LEVEL` | `http://localhost:8080/`, `8080`, temp dir, `INFO` | |
 
 On startup the agent crawls once, so `/readyz` returns 503 until the first crawl finishes. A request that arrives just after a new commit waits for the re-crawl, typically tens of seconds, so callers should allow for that in their timeouts. Secrets are read once at startup; restart the pod after rotating one.
@@ -96,10 +119,10 @@ Wait for `Agent found N capabilities at <commit>` in the log. One-shot crawl wit
 
 1. **Build and push the image** from this directory (PowerShell or any shell):
    ```sh
-   podman build -t docker.io/abdurrahman126/score-capability-agent:0.1.0 .
-   podman push docker.io/abdurrahman126/score-capability-agent:0.1.0
+   podman build -t docker.io/abdurrahman126/score-capability-agent:0.2.0 .
+   podman push docker.io/abdurrahman126/score-capability-agent:0.2.0
    ```
-2. **Set up Vault** as described at the top of [`k8s/vault-policy.hcl`](k8s/vault-policy.hcl): a policy, a `capability-agent-role` bound to the `score-capability-agent` service account, and `secret/capability-agent/config` with `a2a_token`, `anthropic_api_key` and `git_token` (a read-only GitHub token for both repos).
+2. **Set up Vault** as described at the top of [`k8s/vault-policy.hcl`](k8s/vault-policy.hcl): a policy, a `capability-agent-role` bound to the `score-capability-agent` service account, and `secret/capability-agent/config` with `a2a_token`, `anthropic_api_key` and `git_token` (a read-only GitHub token for both repos). The policy also reads score-api's `secret/score-api/app-secret`, so the agent can call score-api.
 3. **Apply the single manifest** [`k8s/capability-agent.yaml`](k8s/capability-agent.yaml) (ServiceAccount, Deployment, Service, TLS Issuer/Certificate, Ingress). In Rancher: cluster → Import YAML → namespace `default`. Or:
    ```sh
    kubectl apply -f k8s/capability-agent.yaml
@@ -107,11 +130,12 @@ Wait for `Agent found N capabilities at <commit>` in the log. One-shot crawl wit
    ```
 4. **Point the calling agent** at `https://score-capability-agent.apps.ai.cdis.systemsltd.local` and give it the same `a2a_token`. The hostname must resolve to the ingress node `192.168.76.25`, and the certificate is self-signed.
 
-The pod has no RBAC and no cloud credentials. It runs as non-root with a read-only root filesystem and needs outbound access to `github.com` and `api.anthropic.com` only. `PUBLIC_URL` is the ingress URL because A2A clients connect to the URL the Agent Card advertises.
+The pod has no RBAC and no cloud credentials. It runs as non-root with a read-only root filesystem and needs outbound access to `github.com`, `api.anthropic.com` and the in-cluster `score-api` Service only. `PUBLIC_URL` is the ingress URL because A2A clients connect to the URL the Agent Card advertises.
 
 ## Tests
 
 - `scripts/test-capability-agent.py` covers the parsers, grounding of LLM output, and the tool sandbox.
 - `scripts/test-capability-a2a.py` covers crawl on request, caching per commit, failed crawls not being cached, auth, and the skills.
+- `scripts/test-capability-actions.py` covers `call_tool` against a fake score-api: validation before the call, provision and delete-all tasks, `returnImmediately` with `GetTask`, and credential handling.
 
-Both run against throwaway Git repos with the LLM stubbed out, so they need no network or API key, and both run from `scripts/validate.sh`. They check the wiring, not the model's judgement. Check that by running locally with a real key.
+All three run against throwaway Git repos with the LLM stubbed out, so they need no network or API key, and all run from `scripts/validate.sh`. They check the wiring, not the model's judgement. Check that by running locally with a real key.

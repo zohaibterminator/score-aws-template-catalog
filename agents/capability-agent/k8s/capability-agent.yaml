@@ -45,6 +45,9 @@ spec:
         vault.hashicorp.com/agent-inject-template-anthropic-api-key: '{{- with secret "secret/data/capability-agent/config" -}}{{ .Data.data.anthropic_api_key }}{{- end -}}'
         vault.hashicorp.com/agent-inject-secret-git-token: secret/data/capability-agent/config
         vault.hashicorp.com/agent-inject-template-git-token: '{{- with secret "secret/data/capability-agent/config" -}}{{ .Data.data.git_token }}{{- end -}}'
+        # score-api's own shared secret, read from score-api's path so rotating it there reaches the agent too.
+        vault.hashicorp.com/agent-inject-secret-score-api-secret: secret/data/score-api/app-secret
+        vault.hashicorp.com/agent-inject-template-score-api-secret: '{{- with secret "secret/data/score-api/app-secret" -}}{{ .Data.data.shared_secret }}{{- end -}}'
     spec:
       serviceAccountName: score-capability-agent
       securityContext:
@@ -56,7 +59,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: agent
-        image: docker.io/abdurrahman126/score-capability-agent:0.1.0
+        image: docker.io/abdurrahman126/score-capability-agent:0.2.0
         imagePullPolicy: Always       # re-pull when an image tag is rebuilt; switch to IfNotPresent once tags are immutable
         ports:
         - name: http
@@ -82,6 +85,10 @@ spec:
           value: /vault/secrets/anthropic-api-key
         - name: GIT_TOKEN_FILE
           value: /vault/secrets/git-token
+        - name: SCORE_API_URL          # in-cluster Service: no ingress timeout, so delete-all can run 20 minutes
+          value: http://score-api.default.svc.cluster.local
+        - name: SCORE_API_SECRET_FILE  # sent as X-App-Secret; without it the agent lists but cannot execute tools
+          value: /vault/secrets/score-api-secret
         readinessProbe:
           httpGet:
             path: /readyz

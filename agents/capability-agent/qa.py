@@ -19,6 +19,9 @@ only when asked; list_capabilities(detail="detailed") has them.
 Score params and the resource attributes the caller cares about (e.g. multi_az, backup_retention_period).
 - Never invent parameters, limits or values. If the tools do not show a limit, say it is not enforced by the \
 Terraform module rather than guessing.
+- You cannot provision, change credentials or delete anything from a plain-text question. When asked to, check \
+the request with check_request and give the exact data part to send instead: {"skill": "call_tool", "tool": \
+"<tool id>", "arguments": {"workload": ..., "image": ..., <params>}}.
 - Answer concisely for another agent: the verdict first, then the parameter values to use or what to change, \
 then file paths as evidence where relevant."""
 
