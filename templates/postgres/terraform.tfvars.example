@@ -1,5 +1,0 @@
-name = "orders-000000000001"
-vpc_id = "vpc-EXAMPLE"
-subnet_ids = ["subnet-EXAMPLE-A", "subnet-EXAMPLE-B"]
-client_cidr_blocks = ["10.90.0.0/20"]
-# Supply db_password through a runtime secret.
