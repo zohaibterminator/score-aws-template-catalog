@@ -1,0 +1,132 @@
+# Hand-written Score provisioner for an EKS cluster (type eks, class aws-terraform).
+#
+# Renders one tofu-controller Terraform CR that runs ./templates/eks from the score-aws-template-catalog
+# GitRepository. The CR has no metadata.namespace: whatever applies it sets the namespace (Flux
+# Kustomization targetNamespace: score-dev, or kubectl apply -n "$SCORE_NAMESPACE"). Its state Secret
+# (tfstate-default-eks-<guid>) and output Secret (tf-output-<guid>) live in that same namespace, apart
+# from the RDS pipeline in default.
+#
+# Required params: cluster_name, aws_account_id, region, kubernetes_version, api_allowed_cidrs.
+- uri: template://systems-limited/eks-aws-tofu-controller
+  type: eks
+  class: aws-terraform
+  description: Provisions a VPC, an Amazon EKS cluster and a managed node group through a tofu-controller Terraform CR.
+  init: |
+    {{- range $p := list "cluster_name" "aws_account_id" "region" "kubernetes_version" "api_allowed_cidrs" }}
+    {{- if not (index $.Params $p) }}{{ fail (printf "eks resource param %q is required" $p) }}{{ end }}
+    {{- end }}
+    clusterName: {{ .Params.cluster_name | quote }}
+    awsAccountId: {{ .Params.aws_account_id | toString | quote }}
+    region: {{ .Params.region | quote }}
+    kubernetesVersion: {{ .Params.kubernetes_version | toString | quote }}
+    apiAllowedCidrs: {{ .Params.api_allowed_cidrs | toJson }}
+    environment: {{ .Params.environment | default "dev" | quote }}
+    plane: {{ .Params.plane | default "resource" | quote }}
+    vpcCidr: {{ .Params.vpc_cidr | default "10.90.0.0/16" | quote }}
+    azs: {{ .Params.azs | default list | toJson }}
+    publicSubnetCidrs: {{ .Params.public_subnet_cidrs | default list | toJson }}
+    privateSubnetCidrs: {{ .Params.private_subnet_cidrs | default list | toJson }}
+    nodeInstanceTypes: {{ .Params.node_instance_types | default (list "t3.small") | toJson }}
+    nodeMinSize: {{ .Params.node_min_size | default 1 }}
+    nodeMaxSize: {{ .Params.node_max_size | default 2 }}
+    nodeDesiredSize: {{ .Params.node_desired_size | default 2 }}
+  outputs: |
+    cluster_name: {{ .Init.clusterName }}
+    region: {{ .Init.region }}
+    endpoint: {{ encodeSecretRef (printf "tf-output-%s" .Guid) "cluster_endpoint" }}
+    certificate_authority_data: {{ encodeSecretRef (printf "tf-output-%s" .Guid) "cluster_certificate_authority_data" }}
+    vpc_id: {{ encodeSecretRef (printf "tf-output-%s" .Guid) "vpc_id" }}
+    node_group_name: {{ encodeSecretRef (printf "tf-output-%s" .Guid) "node_group_name" }}
+  expected_outputs:
+    - cluster_name
+    - region
+    - endpoint
+    - certificate_authority_data
+    - vpc_id
+    - node_group_name
+  manifests: |
+    - apiVersion: infra.contrib.fluxcd.io/v1alpha2
+      kind: Terraform
+      metadata:
+        name: eks-{{ .Guid }}
+        labels:
+          platform.company/plane: {{ .Init.plane | quote }}
+          platform.company/capability: eks
+          app.kubernetes.io/managed-by: score
+        annotations:
+          k8s.score.dev/source-workload: {{ .SourceWorkload }}
+          k8s.score.dev/resource-uid: {{ .Uid }}
+      spec:
+        interval: 10m
+        approvePlan: auto
+        destroyResourcesOnDeletion: true
+        path: ./templates/eks
+        sourceRef:
+          kind: GitRepository
+          name: score-aws-template-catalog
+          namespace: flux-system
+        runnerPodTemplate:
+          metadata:
+            annotations:
+              vault.hashicorp.com/agent-inject: "true"
+              vault.hashicorp.com/role: "tf-runner-dev-role"
+              vault.hashicorp.com/agent-inject-secret-aws: "secret/data/score-api/aws-creds"
+              vault.hashicorp.com/agent-inject-template-aws: |
+                {{"{{"}}- with secret "secret/data/score-api/aws-creds" -{{"}}"}}
+                [default]
+                aws_access_key_id={{"{{"}} .Data.data.AWS_ACCESS_KEY_ID {{"}}"}}
+                aws_secret_access_key={{"{{"}} .Data.data.AWS_SECRET_ACCESS_KEY {{"}}"}}
+                {{"{{"}}- end -{{"}}"}}
+          spec:
+            env:
+              - name: AWS_SHARED_CREDENTIALS_FILE
+                value: /vault/secrets/aws
+              - name: AWS_REGION
+                value: {{ .Init.region | quote }}
+        vars:
+          - name: cluster_name
+            value: {{ .Init.clusterName | quote }}
+          - name: aws_account_id
+            value: {{ .Init.awsAccountId | quote }}
+          - name: region
+            value: {{ .Init.region | quote }}
+          - name: environment
+            value: {{ .Init.environment | quote }}
+          - name: plane
+            value: {{ .Init.plane | quote }}
+          - name: kubernetes_version
+            value: {{ .Init.kubernetesVersion | quote }}
+          - name: api_allowed_cidrs
+            value: {{ .Init.apiAllowedCidrs | toJson }}
+          - name: vpc_cidr
+            value: {{ .Init.vpcCidr | quote }}
+          - name: azs
+            value: {{ .Init.azs | toJson }}
+          - name: public_subnet_cidrs
+            value: {{ .Init.publicSubnetCidrs | toJson }}
+          - name: private_subnet_cidrs
+            value: {{ .Init.privateSubnetCidrs | toJson }}
+          - name: node_instance_types
+            value: {{ .Init.nodeInstanceTypes | toJson }}
+          - name: node_min_size
+            value: {{ .Init.nodeMinSize }}
+          - name: node_max_size
+            value: {{ .Init.nodeMaxSize }}
+          - name: node_desired_size
+            value: {{ .Init.nodeDesiredSize }}
+          - name: tags
+            value: {{ dict "score_resource_uid" (.Uid | replace "#" "_") "score_workload" .SourceWorkload | toJson }}
+        writeOutputsToSecret:
+          name: tf-output-{{ .Guid }}
+          outputs:
+            - cluster_name
+            - cluster_arn
+            - cluster_endpoint
+            - cluster_certificate_authority_data
+            - cluster_version
+            - node_group_name
+            - vpc_id
+            - private_subnet_ids
+            - public_subnet_ids
+            - region
+            - kubeconfig_command

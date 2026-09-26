@@ -1,0 +1,13 @@
+catalog_version: 1.1.0
+default_template: eks
+recommended_score_resource:
+  type: eks
+  class: aws-terraform
+templates:
+- name: eks
+  path: ./templates/eks
+  contract: ./templates/eks/contract.yaml
+  purpose: Two-AZ VPC, Amazon EKS cluster and managed node group in one tofu-controller state
+  terraform_cr_source_path: ./templates/eks
+  composition: root
+  score_provisioner: ./.score-k8s/20-eks.provisioners.yaml

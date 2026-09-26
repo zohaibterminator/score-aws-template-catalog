@@ -1,4 +1,4 @@
-inspection_date: '2026-09-22'
+inspection_date: '2026-09-26'
 redistribution_note: No upstream module source files are copied or vendored. All are Terraform Registry references pinned in module blocks.
 sources:
 - repository_url: https://github.com/terraform-aws-modules/terraform-aws-vpc
@@ -55,6 +55,89 @@ sources:
   selection_reason: Queue and DLQ with managed SSE and redrive controls.
   date_inspected: '2026-09-22'
   compatibility_notes: Requires AWS provider >=4.36; initialized with AWS 5.100.0.
+- repository_url: https://github.com/terraform-aws-modules/terraform-aws-vpc
+  module_registry_address: terraform-aws-modules/vpc/aws
+  exact_version: 6.7.3
+  git_tag: v6.7.3
+  git_commit: b3abd6df2ecf052451a361ed55b8f06f8742a795
+  license: Apache-2.0
+  files_copied: []
+  use: referenced
+  selection_reason: Latest release at inspection; two-AZ public/private subnets with a single NAT gateway for the EKS template.
+  date_inspected: '2026-09-26'
+  compatibility_notes: Requires AWS provider >=6.28 and Terraform >=1.0; EKS template pins AWS 6.66.0.
+- repository_url: https://github.com/terraform-aws-modules/terraform-aws-eks
+  module_registry_address: terraform-aws-modules/eks/aws
+  exact_version: 21.26.0
+  git_tag: v21.26.0
+  git_commit: 323c633629b8e4306d94eb1392d7400a80143621
+  license: Apache-2.0
+  files_copied: []
+  use: referenced
+  selection_reason: Latest release at inspection; EKS control plane, access entries, add-ons and managed node groups.
+  date_inspected: '2026-09-26'
+  compatibility_notes: Requires AWS provider >=6.59, tls >=4.0, time >=0.9, cloudinit >=2.0, null >=3.0 and Terraform >=1.5.7.
+- repository_url: https://github.com/terraform-aws-modules/terraform-aws-kms
+  module_registry_address: terraform-aws-modules/kms/aws
+  exact_version: 4.0.0
+  git_tag: v4.0.0
+  git_commit: 28846a0d9ba83629f006847f25f0e69bd05116b1
+  license: Apache-2.0
+  files_copied: []
+  use: referenced
+  selection_reason: Transitive dependency pinned by terraform-aws-modules/eks/aws 21.26.0 for cluster secret encryption.
+  date_inspected: '2026-09-26'
+  compatibility_notes: Requires AWS provider >=6.0.
+- repository_url: https://github.com/hashicorp/terraform-provider-aws
+  module_registry_address: null
+  provider_registry_address: registry.opentofu.org/hashicorp/aws
+  exact_version: 6.66.0
+  license: MPL-2.0
+  files_copied: []
+  use: referenced
+  selection_reason: Latest AWS provider at inspection; satisfies the EKS, VPC and KMS module constraints.
+  date_inspected: '2026-09-26'
+  compatibility_notes: Used by templates/eks only; the RDS-era templates stay on 5.100.0.
+- repository_url: https://github.com/hashicorp/terraform-provider-tls
+  module_registry_address: null
+  provider_registry_address: registry.opentofu.org/hashicorp/tls
+  exact_version: 4.4.1
+  license: MPL-2.0
+  files_copied: []
+  use: referenced
+  selection_reason: Required by the EKS module (OIDC provider thumbprint).
+  date_inspected: '2026-09-26'
+  compatibility_notes: EKS module requires >=4.0.
+- repository_url: https://github.com/hashicorp/terraform-provider-time
+  module_registry_address: null
+  provider_registry_address: registry.opentofu.org/hashicorp/time
+  exact_version: 0.14.2
+  license: MPL-2.0
+  files_copied: []
+  use: referenced
+  selection_reason: Required by the EKS module (dataplane wait).
+  date_inspected: '2026-09-26'
+  compatibility_notes: EKS module requires >=0.9.
+- repository_url: https://github.com/hashicorp/terraform-provider-cloudinit
+  module_registry_address: null
+  provider_registry_address: registry.opentofu.org/hashicorp/cloudinit
+  exact_version: 2.4.1
+  license: MPL-2.0
+  files_copied: []
+  use: referenced
+  selection_reason: Required by the EKS managed node group user data submodule.
+  date_inspected: '2026-09-26'
+  compatibility_notes: EKS user data submodule requires >=2.0.
+- repository_url: https://github.com/hashicorp/terraform-provider-null
+  module_registry_address: null
+  provider_registry_address: registry.opentofu.org/hashicorp/null
+  exact_version: 3.3.2
+  license: MPL-2.0
+  files_copied: []
+  use: referenced
+  selection_reason: Required by the EKS managed node group user data submodule.
+  date_inspected: '2026-09-26'
+  compatibility_notes: EKS user data submodule requires >=3.0.
 - repository_url: https://github.com/hashicorp/terraform-provider-aws
   module_registry_address: null
   provider_registry_address: registry.terraform.io/hashicorp/aws

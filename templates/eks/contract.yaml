@@ -1,0 +1,216 @@
+template_name: eks
+template_path: ./templates/eks
+purpose: One-shot tofu-controller root that creates a two-AZ VPC, an Amazon EKS cluster and a managed
+  node group in one state
+template_version: 1.0.0
+required_terraform_version: '>= 1.7.0, < 2.0.0'
+required_aws_provider_version: = 6.66.0
+required_random_provider_version: null
+upstream_modules:
+- address: terraform-aws-modules/vpc/aws
+  version: 6.7.3
+- address: terraform-aws-modules/eks/aws
+  version: 21.26.0
+- address: terraform-aws-modules/kms/aws
+  version: 4.0.0
+inputs:
+- name: cluster_name
+  type: string
+  required: true
+  sensitive: false
+  validations:
+  - cluster_name must be 3-28 characters of lowercase letters, digits and hyphens, starting with a letter.
+- name: aws_account_id
+  type: string
+  required: true
+  sensitive: false
+  validations:
+  - aws_account_id must be a 12-digit AWS account ID.
+  - The runner's credentials must belong to this account (provider allowed_account_ids and a postcondition).
+- name: region
+  type: string
+  required: true
+  sensitive: false
+  validations:
+  - region must be an AWS region name such as us-east-1.
+- name: environment
+  type: string
+  required: false
+  sensitive: false
+  validations:
+  - environment must be one of dev, staging, uat, dr, prod.
+  default_hcl: '"dev"'
+- name: plane
+  type: string
+  required: false
+  sensitive: false
+  validations:
+  - plane must be one of resource, dev, observability, integration, security, unspecified.
+  default_hcl: '"resource"'
+- name: kubernetes_version
+  type: string
+  required: true
+  sensitive: false
+  validations:
+  - kubernetes_version must look like 1.34 and be offered by EKS in the region.
+- name: api_allowed_cidrs
+  type: list(string)
+  required: true
+  sensitive: false
+  validations:
+  - api_allowed_cidrs must contain at least one valid CIDR.
+  - api_allowed_cidrs must not contain 0.0.0.0/0.
+- name: vpc_cidr
+  type: string
+  required: false
+  sensitive: false
+  validations:
+  - vpc_cidr must be a valid IPv4 CIDR between /16 and /20.
+  default_hcl: '"10.90.0.0/16"'
+- name: azs
+  type: list(string)
+  required: false
+  sensitive: false
+  validations:
+  - azs must be empty (first two available zones) or exactly two zones.
+  default_hcl: '[]'
+- name: public_subnet_cidrs
+  type: list(string)
+  required: false
+  sensitive: false
+  validations:
+  - public_subnet_cidrs must be empty (derived from vpc_cidr) or two CIDRs inside vpc_cidr.
+  default_hcl: '[]'
+- name: private_subnet_cidrs
+  type: list(string)
+  required: false
+  sensitive: false
+  validations:
+  - private_subnet_cidrs must be empty (derived from vpc_cidr) or two CIDRs inside vpc_cidr.
+  - All four subnet CIDRs must be different.
+  default_hcl: '[]'
+- name: node_instance_types
+  type: list(string)
+  required: false
+  sensitive: false
+  validations:
+  - node_instance_types must list at least one instance type.
+  default_hcl: '["t3.small"]'
+- name: node_min_size
+  type: number
+  required: false
+  sensitive: false
+  validations:
+  - node_min_size must be a whole number of at least 1.
+  default_hcl: '1'
+- name: node_max_size
+  type: number
+  required: false
+  sensitive: false
+  validations:
+  - node_max_size must be a whole number from 1 to 10.
+  default_hcl: '2'
+- name: node_desired_size
+  type: number
+  required: false
+  sensitive: false
+  validations:
+  - node_min_size <= node_desired_size <= node_max_size.
+  default_hcl: '2'
+- name: tags
+  type: map(string)
+  required: false
+  sensitive: false
+  validations: []
+  default_hcl: '{}'
+outputs:
+- name: cluster_name
+  type: string
+  sensitive: false
+- name: cluster_arn
+  type: string
+  sensitive: false
+- name: cluster_endpoint
+  type: string
+  sensitive: false
+- name: cluster_certificate_authority_data
+  type: string
+  sensitive: false
+- name: cluster_version
+  type: string
+  sensitive: false
+- name: oidc_provider_arn
+  type: string
+  sensitive: false
+- name: node_group_name
+  type: string
+  sensitive: false
+- name: node_group_status
+  type: string
+  sensitive: false
+- name: vpc_id
+  type: string
+  sensitive: false
+- name: private_subnet_ids
+  type: list(string)
+  sensitive: false
+- name: public_subnet_ids
+  type: list(string)
+  sensitive: false
+- name: region
+  type: string
+  sensitive: false
+- name: aws_account_id
+  type: string
+  sensitive: false
+- name: kubeconfig_command
+  type: string
+  sensitive: false
+optional_components: []
+dependencies:
+- AWS credentials for aws_account_id, injected into the runner pod by Vault (role tf-runner-dev-role).
+- Flux GitRepository score-aws-template-catalog in flux-system serving this repository.
+- tofu-controller watching the target namespace, with a tf-runner ServiceAccount there.
+estimated_destructive_operations:
+- Changing cluster_name, vpc_cidr, azs or subnet CIDRs replaces the VPC, subnets and cluster.
+- Lowering kubernetes_version is rejected by EKS; raising it upgrades the control plane in place.
+- Changing node_instance_types replaces the managed node group's nodes.
+- Deleting the Terraform CR destroys the whole stack (destroyResourcesOnDeletion true).
+special_teardown_resources:
+- Load balancers and EBS volumes created by workloads inside the cluster are not in Terraform state; delete
+  them first or VPC deletion fails on dependent network interfaces.
+- The KMS key for secret encryption is scheduled for deletion after 7 days, not deleted immediately.
+score_resource_type: eks
+score_class: aws-terraform
+direct_terraform_cr_root: true
+terraform_cr_source_path: ./templates/eks
+suggested_input_secret_name: secret-<guid>
+suggested_output_secret_name: tf-output-<guid>
+required_iam_actions:
+  identity_check:
+  - sts:GetCallerIdentity
+  network:
+  - ec2:*Vpc*, ec2:*Subnet*, ec2:*RouteTable*, ec2:*Route, ec2:*InternetGateway*, ec2:*NatGateway*
+  - ec2:AllocateAddress, ec2:ReleaseAddress, ec2:*SecurityGroup*, ec2:CreateTags, ec2:DeleteTags, ec2:Describe*
+  eks:
+  - eks:CreateCluster, eks:DeleteCluster, eks:Describe*, eks:List*, eks:Update*, eks:TagResource
+  - eks:CreateNodegroup, eks:DeleteNodegroup, eks:CreateAddon, eks:DeleteAddon, eks:*AccessEntry, eks:*AccessPolicy
+  - ec2:CreateLaunchTemplate, ec2:DeleteLaunchTemplate, ec2:CreateLaunchTemplateVersion, ec2:RunInstances
+  iam:
+  - iam:CreateRole, iam:DeleteRole, iam:GetRole, iam:TagRole, iam:PassRole, iam:*RolePolicy*, iam:ListInstanceProfilesForRole
+  - iam:CreatePolicy, iam:DeletePolicy, iam:GetPolicy, iam:GetPolicyVersion, iam:ListPolicyVersions
+  - iam:CreateOpenIDConnectProvider, iam:DeleteOpenIDConnectProvider, iam:GetOpenIDConnectProvider, iam:TagOpenIDConnectProvider
+  - iam:CreateServiceLinkedRole
+  kms_and_logs:
+  - kms:CreateKey, kms:CreateAlias, kms:DeleteAlias, kms:ScheduleKeyDeletion, kms:Describe*, kms:Get*, kms:List*, kms:PutKeyPolicy, kms:TagResource, kms:EnableKeyRotation
+  - logs:CreateLogGroup, logs:DeleteLogGroup, logs:PutRetentionPolicy, logs:DescribeLogGroups, logs:TagResource, logs:ListTagsForResource
+connectivity_assumptions:
+- The public API endpoint only accepts api_allowed_cidrs; kubectl users need an egress IP in that list.
+- Terraform does not call the Kubernetes API, so the runner does not need to reach the cluster endpoint.
+- Nodes run in private subnets and reach AWS and the internet through a single NAT gateway.
+production_safeguards:
+- Plans run against a different account fail (provider allowed_account_ids plus a caller identity postcondition).
+- The public API endpoint cannot be opened to 0.0.0.0/0.
+- Cluster secrets are encrypted with a module-managed KMS key; only access entries (authentication_mode API) grant cluster access.
+- This template is tuned for disposable test clusters (deletion_protection false, one NAT gateway, 7-day logs, 7-day KMS deletion window); raise these before production use.
+- No input Secret is used; suggested_input_secret_name is unused.

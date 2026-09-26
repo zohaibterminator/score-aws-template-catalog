@@ -19,7 +19,7 @@
     "estimated_destructive_operations": {"$ref": "#/$defs/strings"},
     "special_teardown_resources": {"$ref": "#/$defs/strings"},
     "score_resource_type": {"type": "string"},
-    "score_class": {"const": "aws"},
+    "score_class": {"enum": ["aws", "aws-terraform"]},
     "direct_terraform_cr_root": {"type": "boolean"},
     "terraform_cr_source_path": {"type": "string", "pattern": "^\\./templates/"},
     "suggested_input_secret_name": {"const": "secret-<guid>"},
