@@ -112,11 +112,14 @@ module "eks" {
       name            = local.node_group_name
       use_name_prefix = false
       ami_type        = "AL2023_x86_64_STANDARD"
-      instance_types  = var.node_instance_types
-      min_size        = var.node_min_size
-      max_size        = var.node_max_size
-      desired_size    = var.node_desired_size
-      disk_size       = 20
+      # Let EKS choose the latest AMI release for the Kubernetes version, instead of looking it up in the
+      # public SSM parameter, so the runner does not need ssm:GetParameter.
+      use_latest_ami_release_version = false
+      instance_types                 = var.node_instance_types
+      min_size                       = var.node_min_size
+      max_size                       = var.node_max_size
+      desired_size                   = var.node_desired_size
+      disk_size                      = 20
     }
   }
 }
