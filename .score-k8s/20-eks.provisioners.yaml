@@ -2,11 +2,12 @@
 #
 # Renders one tofu-controller Terraform CR that runs ./templates/eks from the score-aws-template-catalog
 # GitRepository. The CR has no metadata.namespace: whatever applies it sets the namespace (Flux
-# Kustomization targetNamespace: score-dev, or kubectl apply -n "$SCORE_NAMESPACE"). Its state Secret
-# (tfstate-default-eks-<guid>) and output Secret (tf-output-<guid>) live in that same namespace, apart
-# from the RDS pipeline in default.
+# kustomization namespace from score-api SCORE_NAMESPACE, e.g. default). Its state Secret
+# (tfstate-default-eks-<guid>) and output Secret (tf-output-<guid>) live in that same namespace, next to
+# the RDS objects but under different names.
 #
 # Required params: cluster_name, aws_account_id, region, kubernetes_version, api_allowed_cidrs.
+# runner_vault_role is set by score-api from EKS_RUNNER_VAULT_ROLE (default tf-runner-role).
 - uri: template://systems-limited/eks-aws-tofu-controller
   type: eks
   class: aws-terraform
@@ -30,6 +31,9 @@
     nodeMinSize: {{ .Params.node_min_size | default 1 }}
     nodeMaxSize: {{ .Params.node_max_size | default 2 }}
     nodeDesiredSize: {{ .Params.node_desired_size | default 2 }}
+    # Platform setting passed by score-api (EKS_RUNNER_VAULT_ROLE), not by callers: the Vault role bound to
+    # the tf-runner ServiceAccount in the namespace the CR is applied to.
+    runnerVaultRole: {{ .Params.runner_vault_role | default "tf-runner-role" | quote }}
   outputs: |
     cluster_name: {{ .Init.clusterName }}
     region: {{ .Init.region }}
@@ -69,7 +73,7 @@
           metadata:
             annotations:
               vault.hashicorp.com/agent-inject: "true"
-              vault.hashicorp.com/role: "tf-runner-dev-role"
+              vault.hashicorp.com/role: {{ .Init.runnerVaultRole | quote }}
               vault.hashicorp.com/agent-inject-secret-aws: "secret/data/score-api/aws-creds"
               vault.hashicorp.com/agent-inject-template-aws: |
                 {{"{{"}}- with secret "secret/data/score-api/aws-creds" -{{"}}"}}

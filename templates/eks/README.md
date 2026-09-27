@@ -26,9 +26,9 @@ This is tuned for disposable test clusters, not production. It uses one NAT gate
 
 ## Score and tofu-controller
 
-The Score provisioner is [`.score-k8s/20-eks.provisioners.yaml`](../../.score-k8s/20-eks.provisioners.yaml) (type `eks`, class `aws-terraform`). It renders one Terraform CR, `eks-<guid>`, that points at `./templates/eks` in the `score-aws-template-catalog` GitRepository in `flux-system`. The CR sets `approvePlan: auto` and `destroyResourcesOnDeletion: true`. The runner gets AWS credentials from Vault through the `tf-runner-dev-role` role. Outputs are written to `tf-output-<guid>`.
+The Score provisioner is [`.score-k8s/20-eks.provisioners.yaml`](../../.score-k8s/20-eks.provisioners.yaml) (type `eks`, class `aws-terraform`). It renders one Terraform CR, `eks-<guid>`, that points at `./templates/eks` in the `score-aws-template-catalog` GitRepository in `flux-system`. The CR sets `approvePlan: auto` and `destroyResourcesOnDeletion: true`. The runner gets AWS credentials from Vault through the role score-api passes as `runner_vault_role` (its `EKS_RUNNER_VAULT_ROLE`, default `tf-runner-role`, which is bound to `tf-runner` in `default`). Outputs are written to `tf-output-<guid>`.
 
-The CR has no `metadata.namespace`. The namespace is set by whatever applies it: a Flux Kustomization with `targetNamespace: score-dev`, or `kubectl apply -n "$SCORE_NAMESPACE"`. Its state (`tfstate-default-eks-<guid>`) stays in that namespace, apart from the RDS pipeline.
+The CR has no `metadata.namespace`. The namespace is set by whatever applies it: the `kustomization.yaml` score-api publishes, which uses its `SCORE_NAMESPACE` (the `default` score-api uses `default`). Its state (`tfstate-default-eks-<guid>`) stays in that namespace, next to the RDS objects under different names.
 
 ## Deletion
 

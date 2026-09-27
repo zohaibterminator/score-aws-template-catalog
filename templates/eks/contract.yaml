@@ -168,7 +168,7 @@ outputs:
   sensitive: false
 optional_components: []
 dependencies:
-- AWS credentials for aws_account_id, injected into the runner pod by Vault (role tf-runner-dev-role).
+- AWS credentials for aws_account_id, injected into the runner pod by Vault (role from score-api EKS_RUNNER_VAULT_ROLE, default tf-runner-role).
 - Flux GitRepository score-aws-template-catalog in flux-system serving this repository.
 - tofu-controller watching the target namespace, with a tf-runner ServiceAccount there.
 estimated_destructive_operations:

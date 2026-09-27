@@ -41,7 +41,7 @@ assert cr["metadata"]["name"].startswith("eks-")
 assert spec["approvePlan"] == "auto" and spec["destroyResourcesOnDeletion"] is True
 assert spec["path"] == "./templates/eks"
 assert spec["sourceRef"] == {"kind": "GitRepository", "name": "score-aws-template-catalog", "namespace": "flux-system"}
-assert spec["runnerPodTemplate"]["metadata"]["annotations"]["vault.hashicorp.com/role"] == "tf-runner-dev-role"
+assert spec["runnerPodTemplate"]["metadata"]["annotations"]["vault.hashicorp.com/role"] == "tf-runner-role"
 v = {x["name"]: x["value"] for x in spec["vars"]}
 assert v["api_allowed_cidrs"] == ["203.0.113.10/32"] and v["node_desired_size"] == 2 and v["azs"] == []
 assert "#" not in v["tags"]["score_resource_uid"], "AWS tag values cannot contain #"
