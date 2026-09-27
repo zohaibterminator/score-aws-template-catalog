@@ -4,15 +4,12 @@ on:
   push:
     branches: [main]
 jobs:
-  catalog:
+  capability-agent:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
     - uses: actions/checkout@v4
-    - uses: hashicorp/setup-terraform@v3
-      with:
-        terraform_version: 1.10.5
     - uses: actions/setup-python@v5
       with:
         python-version: '3.11'

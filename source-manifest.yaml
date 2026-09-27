@@ -1,5 +1,5 @@
 inspection_date: '2026-09-26'
-redistribution_note: No upstream module source files are copied or vendored. All are Terraform Registry references pinned in module blocks.
+redistribution_note: No upstream module source files are copied or vendored. All are Terraform Registry references pinned in module blocks. The EKS module that uses the vpc 6.7.3, eks 21.26.0 and kms 4.0.0 entries now lives in score-tf-modules/eks; the other module entries belong to the retired application-stack templates.
 sources:
 - repository_url: https://github.com/terraform-aws-modules/terraform-aws-vpc
   module_registry_address: terraform-aws-modules/vpc/aws
