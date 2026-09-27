@@ -13,7 +13,8 @@ from capability_fixtures import MAIN_TF, PROVISIONER, commit, make_repo
 from starlette.testclient import TestClient
 
 import score_bindings
-from a2a_server import build_app
+from a2a_server import _outcome, build_app
+from hcl_eval import evaluate
 from score_api import ScoreApi
 from store import CapabilityStore
 
@@ -42,6 +43,10 @@ variable "api_allowed_cidrs" {
 variable "environment" {
   type    = string
   default = "dev"
+  validation {
+    condition     = contains(["dev", "staging", "uat", "dr", "prod"], var.environment)
+    error_message = "bad environment"
+  }
 }
 variable "azs" {
   type    = list(string)
@@ -165,6 +170,10 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     assert defaults["environment"] == "dev" and defaults["cluster_name"] is None
     assert {v["terraform_variable"]: v.get("default") for v in bindings["postgres"]["vars"]}["storage_gb"] == "20"
 
+    # python-hcl2 renders list literals without quotes; those words must still be read as strings.
+    assert evaluate('contains([dev, staging, uat, dr, prod], var.environment)', {"environment": "dev"}) is True
+    assert evaluate('contains([dev, staging, uat, dr, prod], var.environment)', {"environment": "qa"}) is False
+
     store = CapabilityStore(str(tmp / "modules"), None, str(tmp / "score"), None, tmp / "work",
                             describe=fake_crawl, check_interval=0)
     score_api = ScoreApi("http://score-api", APP_SECRET, transport=httpx.MockTransport(fake_score_api))
@@ -199,6 +208,12 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         assert body["azs"] == [] and body["node_instance_types"] == ["t3.small"] and body["node_min_size"] == 1
         assert "image" not in body and "runner_vault_role" not in body
 
+        # A request relying on the default environment passes the module's contains([...]) rule.
+        defaulted = {k: v for k, v in request.items() if k != "environment"}
+        task = rpc(client, {"skill": EKS, **defaulted})["task"]
+        assert task["status"]["state"] == "TASK_STATE_COMPLETED", task["status"]
+        assert calls[-1][1]["environment"] == "dev"
+
         # Invalid requests never reach score-api.
         before = len(calls)
         for bad, field in (({**request, "api_allowed_cidrs": ["0.0.0.0/0"]}, "api_allowed_cidrs"),
@@ -228,6 +243,15 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         assert len(crawls) == 2, crawls
         eks_schema = {t["id"]: t for t in manifest["tools"]}[EKS]["inputSchema"]
         assert eks_schema["properties"]["node_instance_types"]["default"] == ["t3.medium"]
+
+# delete-all summaries describe the moment the call ended, once, without repeating score-api's msg.
+summary = _outcome({"status": "partial", "wiped_workloads": "rds-smoke", "wiped_eks_workloads": "eks-smoke",
+                    "destroyed_by_terraform": "rds-1 ", "eks_destroyed_by_terraform": "",
+                    "eks_destroy_in_progress": "eks-2 ", "left_for_retry": "", "manual_cleanup_required": "",
+                    "msg": "RDS teardown done; EKS destroys are still running in the background"})
+assert "Still being destroyed when this task finished" in summary and "not updated later" in summary, summary
+assert "[rds-1]" in summary and "[eks-2]" in summary and "Warning" not in summary, summary
+assert summary.count("EKS destroys are still running") == 0, summary
 
 print("Capability EKS checks passed: nested Score project, list/number defaults, provision_eks manifest, "
       "execution via /cgi-bin/eks, validation before score-api, crawl reuse for state-only commits.")

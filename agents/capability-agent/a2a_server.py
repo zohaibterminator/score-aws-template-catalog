@@ -179,6 +179,8 @@ def _outcome(result: dict[str, Any]) -> str:
         return (f"Dry run: would delete workloads [{result.get('would_delete_workloads', '')}]"
                 + (f" and EKS clusters [{eks}]" if eks else "") + ". "
                 f'Send arguments {{"confirm": "{DELETE_CONFIRMATION}"}} to delete them.')
+    if "wiped_workloads" in result:
+        return _delete_all_outcome(result)
     if str(result.get("terraform_cr", "")).startswith("eks-"):
         line = (f"score-api published {result['terraform_cr']} in namespace {result.get('namespace')}; Flux and "
                 "tofu-controller now create or update the VPC, EKS cluster and node group (about 15-20 minutes). "
@@ -190,7 +192,30 @@ def _outcome(result: dict[str, Any]) -> str:
         line = result.get("msg") or f"score-api finished: {status}."
         if result.get("reconciled"):
             line += f" Reconciled: {result['reconciled'].strip()}."
-    return line + (f" Warning: {result['msg']}" if status == "partial" and result.get("msg") else "")
+    msg = result.get("msg")
+    return line + (f" Warning: {msg}" if status == "partial" and msg and msg not in line else "")
+
+
+def _delete_all_outcome(result: dict[str, Any]) -> str:
+    """Summary of a confirmed delete-all. It describes the moment the call ended: EKS destroys that were
+    still running then keep going in the background, so it must not read as the current state."""
+    def names(key: str) -> str:
+        return ", ".join(str(result.get(key) or "").split())
+    parts = []
+    if names("wiped_workloads") or names("wiped_eks_workloads"):
+        parts.append(f"Wiped RDS workloads [{names('wiped_workloads')}] and EKS workloads [{names('wiped_eks_workloads')}].")
+    done = ", ".join(filter(None, (names("destroyed_by_terraform"), names("eks_destroyed_by_terraform"))))
+    parts.append(f"Destroyed by Terraform before this task finished: [{done}]." if done
+                 else "Nothing had finished destroying when this task finished.")
+    if names("eks_destroy_in_progress"):
+        parts.append(f"Still being destroyed when this task finished (continues in the background, ~15 minutes): "
+                     f"[{names('eks_destroy_in_progress')}]. This result is not updated later; check the current "
+                     "state with `kubectl get terraform -n default`.")
+    if names("left_for_retry"):
+        parts.append(f"Stuck and left for retry: [{names('left_for_retry')}].")
+    if names("manual_cleanup_required"):
+        parts.append(f"May still exist in AWS, check by hand: [{names('manual_cleanup_required')}].")
+    return " ".join(parts)
 
 
 class CapabilityExecutor(AgentExecutor):

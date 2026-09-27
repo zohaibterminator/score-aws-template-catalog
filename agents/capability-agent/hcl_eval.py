@@ -115,7 +115,7 @@ class _Parser:
         if value == "[":
             items = []
             while self.peek() != "]":
-                items.append(self.expr())
+                items.append(self._bare_string() or self.expr())
                 if self.peek() == ",":
                     self.take()
             self.take("]")
@@ -133,6 +133,23 @@ class _Parser:
                 return evaluate_value(self.locals[value[6:]], self.env, self.locals, self.depth + 1)
             return UNKNOWN
         raise ValueError(f"unexpected {value}")
+
+    def _bare_string(self) -> str | None:
+        """A list item that is a bare word, e.g. `dev` in `[dev, prod]`.
+
+        python-hcl2 drops the quotes of strings inside list literals when it renders an expression back to
+        text (`["dev", "prod"]` becomes `[dev, prod]`). A lone word that is not a reference, keyword or
+        function call can only have been such a string, so it is read as one.
+        """
+        if self.pos + 1 >= len(self.tokens):
+            return None
+        kind, value = self.tokens[self.pos]
+        following = self.tokens[self.pos + 1][1]
+        if (kind != "name" or following not in (",", "]") or value in ("true", "false", "null")
+                or value.startswith(("var.", "local.", "module.", "data.", "each.", "count."))):
+            return None
+        self.pos += 1
+        return value
 
     def call(self, name: str) -> Any:
         self.take("(")
@@ -154,7 +171,10 @@ class _Parser:
             if name == "jsondecode" and len(args) == 1:
                 return json.loads(args[0])
             if name == "contains" and len(args) == 2 and isinstance(args[0], list):
-                return args[1] in args[0]
+                if args[1] in args[0]:
+                    return True
+                # Not found, but an unknown item might have matched.
+                return UNKNOWN if any(item is UNKNOWN for item in args[0]) else False
             if name == "length" and len(args) == 1:
                 return len(args[0])
         except (ValueError, KeyError, TypeError):
