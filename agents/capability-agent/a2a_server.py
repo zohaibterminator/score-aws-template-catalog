@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hmac
+import json
 import logging
 import os
 from pathlib import Path
@@ -64,6 +65,49 @@ def _whole_numbers(value: Any) -> Any:
     if isinstance(value, list):
         return [_whole_numbers(v) for v in value]
     return value
+
+
+def _as_request(value: Any) -> dict[str, Any] | None:
+    """A skill request, whether it arrived as a JSON object or as a string holding one."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    return _whole_numbers(value) if isinstance(value, dict) and "skill" in value else None
+
+
+SKILLS = {"list_capabilities", "check_request", "call_tool"}
+ARGUMENT_KEYS = ("arguments", "input", "params", "parameters")
+
+
+def as_tool_call(request: dict[str, Any], agent: str) -> dict[str, Any]:
+    """ValueOps invokes a tool by sending its id as the skill: {"skill": "<tool id>", <arguments>}. Rewrite that as
+    {"skill": "call_tool", "tool": ..., "arguments": ...}; arguments come from a nested object or the other fields."""
+    skill = request.get("skill")
+    if skill in SKILLS or not isinstance(skill, str) or not skill.startswith(f"{agent}."):
+        return request
+    nested = next((request[k] for k in ARGUMENT_KEYS if isinstance(request.get(k), dict)), None)
+    arguments = nested if nested is not None else {k: v for k, v in request.items() if k not in ("skill", "tool")}
+    return {"skill": "call_tool", "tool": skill, "arguments": arguments}
+
+
+SECRET_FIELD_HINTS = ("secret", "password", "access_key", "token", "credential")
+
+
+def masked(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Arguments as received, with anything that looks like a credential replaced by ***, safe to log."""
+    return {k: "***" if any(h in k.lower() for h in SECRET_FIELD_HINTS) else v for k, v in arguments.items()}
+
+
+def structured_requests(message) -> list[dict[str, Any]]:
+    """Skill requests in a message. Callers should send a data part, but a data part holding a JSON string, or a
+    text part that is entirely a JSON object with "skill", is accepted too, so it is executed instead of being
+    treated as a question."""
+    requests = [r for r in map(_as_request, get_data_parts(message.parts)) if r]
+    if not requests and (request := _as_request(get_message_text(message).strip())):
+        requests = [request]
+    return requests
 
 
 def agent_card(public_url: str, auth: bool, actions: bool = False) -> AgentCard:
@@ -142,9 +186,10 @@ def _outcome(result: dict[str, Any]) -> str:
 
 class CapabilityExecutor(AgentExecutor):
     def __init__(self, store: CapabilityStore, answer: Answerer, manifest_provider: str, manifest_agent: str,
-                 score_api: ScoreApi | None = None):
+                 score_api: ScoreApi | None = None, manifest_plane: str = "resource"):
         self.store, self.answer, self.score_api = store, answer, score_api
         self.manifest_provider, self.manifest_agent = manifest_provider, manifest_agent
+        self.manifest_plane = manifest_plane
 
     @staticmethod
     def _parts(text: str, data: Any | None = None) -> list:
@@ -152,8 +197,8 @@ class CapabilityExecutor(AgentExecutor):
 
     async def handle(self, context: RequestContext) -> list:
         message = context.message
-        requests = [_whole_numbers(d) for d in get_data_parts(message.parts) if isinstance(d, dict)]
-        text = get_message_text(message).strip()
+        requests = structured_requests(message)
+        text = "" if requests else get_message_text(message).strip()
         if not requests and not text:
             return self._parts(USAGE)
         try:
@@ -168,7 +213,7 @@ class CapabilityExecutor(AgentExecutor):
             skill = request.get("skill")
             if skill == "list_capabilities":
                 manifest = skills.tool_manifest(snapshot.report, self.manifest_provider, self.manifest_agent,
-                                                actions=self.score_api is not None)
+                                                actions=self.score_api is not None, plane=self.manifest_plane)
                 detail = request.get("detail", "manifest")
                 result = manifest if detail == "manifest" else skills.list_capabilities(snapshot.report, detail)
                 lines = "\n".join(f"- {tool['id']}: {tool['description']}" for tool in manifest["tools"])
@@ -249,9 +294,18 @@ class CapabilityExecutor(AgentExecutor):
         await (updater.failed(reply) if result["status"] == "error" else updater.complete(reply))
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
-        requests = [d for d in get_data_parts(context.message.parts) if isinstance(d, dict)]
+        requests = [as_tool_call(r, self.manifest_agent) for r in structured_requests(context.message)]
+        kinds = [p.WhichOneof("content") for p in context.message.parts]
+        # Log field names, never values: arguments can carry AWS credentials.
+        log.info("Request parts %s -> %s", kinds,
+                 f"skill {requests[0].get('skill')} {requests[0].get('tool') or ''} "
+                 f"argument fields {sorted(requests[0].get('arguments') or {})}" if requests
+                 else "plain-text question for Claude")
         if requests and requests[0].get("skill") == "call_tool":
-            parts = await self.call_tool(context, event_queue, _whole_numbers(requests[0]))
+            arguments = requests[0].get("arguments")
+            log.info("Received %s arguments %s", requests[0].get("tool"),
+                     masked(arguments) if isinstance(arguments, dict) else repr(arguments))
+            parts = await self.call_tool(context, event_queue, requests[0])
             if parts is None:
                 return
         else:
@@ -281,9 +335,9 @@ class BearerAuth:
 
 def build_app(store: CapabilityStore, *, public_url: str, auth_token: str | None, answer: Answerer,
               warm_up: bool = True, manifest_provider: str = "valueops", manifest_agent: str = "infra",
-              score_api: ScoreApi | None = None) -> Starlette:
+              score_api: ScoreApi | None = None, manifest_plane: str = "resource") -> Starlette:
     card = agent_card(public_url, auth=bool(auth_token), actions=score_api is not None)
-    executor = CapabilityExecutor(store, answer, manifest_provider, manifest_agent, score_api)
+    executor = CapabilityExecutor(store, answer, manifest_provider, manifest_agent, score_api, manifest_plane)
     handler = DefaultRequestHandler(agent_executor=executor,
                                     task_store=InMemoryTaskStore(), agent_card=card)
 
@@ -358,7 +412,8 @@ def main() -> None:
     app = build_app(store, public_url=os.environ.get("PUBLIC_URL", f"http://localhost:{port}/"),
                     auth_token=auth_token, answer=lambda snapshot, text: qa.answer(snapshot, text, model),
                     manifest_provider=os.environ.get("MANIFEST_PROVIDER", "valueops"),
-                    manifest_agent=os.environ.get("MANIFEST_AGENT", "infra"), score_api=score_api)
+                    manifest_agent=os.environ.get("MANIFEST_AGENT", "infra"), score_api=score_api,
+                    manifest_plane=os.environ.get("MANIFEST_PLANE", "resource"))
     uvicorn.run(app, host="0.0.0.0", port=port, log_level=os.environ.get("LOG_LEVEL", "info").lower())
 
 

@@ -6,15 +6,16 @@ import argparse
 import json
 from pathlib import Path
 import tempfile
-from typing import Any, Callable
+from typing import Annotated, Any, Callable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
 
 import report as report_builder
 from git_source import checkout
 
 DEFAULT_MODULE_REPO = "https://github.com/zohaibterminator/score-tf-modules.git"
 DEFAULT_MODEL = "claude-opus-5"
+FALLBACK_MODELS = ("claude-opus-5", "claude-fable-5")
 MAX_FILE_BYTES = 60_000
 
 
@@ -41,6 +42,21 @@ class CapabilityDraft(BaseModel):
     parameters: list[ParameterNote]
     behaviours: list[BehaviourNote]
     constraints: list[Constraint]
+
+
+def _decode_capabilities(value: Any) -> Any:
+    # Some models send the list as a JSON string, sometimes wrapped in {"capabilities": [...]}.
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return value
+    if isinstance(value, dict) and "capabilities" in value:
+        value = value["capabilities"]
+    return value
+
+
+Capabilities = Annotated[list[CapabilityDraft], BeforeValidator(_decode_capabilities)]
 
 
 SYSTEM_PROMPT = """You catalogue what a platform can deploy. Terraform modules are run by tofu-controller \
@@ -103,7 +119,7 @@ def crawl_tools(roots: dict[str, Path], report: dict[str, Any], captured: dict[s
         """Return the parsed facts for every capability: Terraform variables, resources, conditions and Score bindings."""
         return json.dumps(report["capabilities"], default=str)
 
-    def submit_capabilities(capabilities: list[CapabilityDraft]) -> str:
+    def submit_capabilities(capabilities: Capabilities) -> str:
         """Submit the final capability descriptions. Call exactly once, after crawling.
 
         Args:
@@ -120,6 +136,10 @@ def run_claude(system: str, prompt: str, tools: list[Callable[..., str]], model:
     import anthropic
     from anthropic import beta_tool
 
+    # If a safety classifier declines, the API retries on a fallback model instead of stopping.
+    # Only the models with those classifiers take the parameter; lighter models are sent without it.
+    fallback = ({"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
+                if model.startswith(FALLBACK_MODELS) else {})
     runner = anthropic.Anthropic().beta.messages.tool_runner(
         model=model,
         max_tokens=16000,
@@ -127,9 +147,7 @@ def run_claude(system: str, prompt: str, tools: list[Callable[..., str]], model:
         tools=[beta_tool(fn) for fn in tools],
         messages=[{"role": "user", "content": prompt}],
         max_iterations=max_iterations,
-        # If a safety classifier declines, the API retries on a fallback model instead of stopping.
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
+        **fallback,
     )
     final = None
     for message in runner:

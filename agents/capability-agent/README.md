@@ -30,7 +30,7 @@ Other agent ◀──A2A── capability list (text + JSON), with the Git commi
 
 ### Claude
 
-The agent runs on Claude through the official `anthropic` Python SDK's Tool Runner (`client.beta.messages.tool_runner`), which handles the tool-call loop. The model is `claude-opus-5` with adaptive thinking (its default), and it can be overridden with `ANTHROPIC_MODEL`. A crawl is capped at 40 tool rounds and a question at 15.
+The agent runs on Claude through the official `anthropic` Python SDK's Tool Runner (`client.beta.messages.tool_runner`), which handles the tool-call loop. The code defaults to `claude-opus-5`; the Kubernetes manifest sets `ANTHROPIC_MODEL=claude-sonnet-5`, which is cheaper and handles this crawl well. Opus 5 and Fable requests opt into server-side refusal fallbacks; other models are called without them. A crawl is capped at 40 tool rounds and a question at 15.
 
 Requests enable server-side refusal fallbacks (`fallbacks: "default"`, beta `server-side-fallback-2026-07-01`). If a safety classifier declines, the API re-runs the request on a fallback model instead of stopping. If the whole chain still declines, or a response is cut off at `max_tokens`, the crawl fails and nothing is cached.
 
@@ -41,7 +41,7 @@ Discovery: `GET /.well-known/agent-card.json` (no auth). All other calls use JSO
 | Ask | How | Answer |
 | --- | --- | --- |
 | Anything in plain text, e.g. "What capabilities do you have?", "Can I get Postgres with backups in dev?" | text part | The agent's answer, plus a data part with the capability or check results it used (`evidence`) |
-| List capabilities | data part `{"skill": "list_capabilities"}` | A tool manifest: `{provider, discoveryMode: "agent-discovery-live", manifestDigest, tools[]}`. Each capability is a tool (`id` like `infra.aws_terraform.provision_postgres`) whose `inputSchema` is the JSON Schema of the `score.yaml` params it accepts, plus `annotations`. `manifestDigest` is a SHA-256 of `tools` and changes only when a capability changes. `"detail": "summary"`, `"detailed"` or `"full"` return other views. |
+| List capabilities | data part `{"skill": "list_capabilities"}` | A tool manifest: `{provider, discoveryMode: "agent-discovery-live", manifestDigest, plane, tools[]}`. Each capability is a tool (`id` like `infra.aws_terraform.provision_postgres`) whose `inputSchema` is the JSON Schema of the `score.yaml` params it accepts, plus `annotations`. `manifestDigest` is a SHA-256 of `tools` and changes only when a capability changes. `"detail": "summary"`, `"detailed"` or `"full"` return other views. |
 | Check a request | data part `{"skill": "check_request", "request": {"score_type": "postgres", "params": {...}, "expect": {"multi_az": true}}}` | `accepted`, `rejected` or `unsupported`, with `issues`, `applied_defaults`, `resolved_attributes` and a ready `score_resource` |
 
 `check_request` evaluates the real Terraform expressions against the crawled capabilities. It rejects a request when:
@@ -91,12 +91,12 @@ When `SCORE_API_SECRET` is set, the manifest also lists what the agent can execu
 | Env var | Default | Purpose |
 | --- | --- | --- |
 | `ANTHROPIC_API_KEY` or `ANTHROPIC_API_KEY_FILE` | required | Claude API key |
-| `ANTHROPIC_MODEL` | `claude-opus-5` | |
+| `ANTHROPIC_MODEL` | `claude-opus-5` | Any Claude model, e.g. `claude-sonnet-5` (manifest) or `claude-haiku-4-5-20251001` |
 | `A2A_AUTH_TOKEN` or `A2A_AUTH_TOKEN_FILE` | required | Bearer token for callers (`A2A_ALLOW_ANONYMOUS=true` for local testing only) |
 | `MODULE_REPO` / `MODULE_REF` | `score-tf-modules` on GitHub / default branch | Terraform repo to crawl. Pin `MODULE_REF` to a reviewed tag in production. |
 | `SCORE_REPO` / `SCORE_REF` | unset | Score provisioner repo. Without it, the Score mapping is not reported. |
 | `GIT_CHECK_SECONDS` | `60` | How often requests may check Git for a new commit |
-| `MANIFEST_PROVIDER` / `MANIFEST_AGENT` | `valueops` / `infra` | Top-level `provider` and each tool's `agent` in the manifest |
+| `MANIFEST_PROVIDER` / `MANIFEST_AGENT` / `MANIFEST_PLANE` | `valueops` / `infra` / `resource` | Top-level `provider`, each tool's `agent`, and the top-level `plane` in the manifest |
 | `GIT_TOKEN` or `GIT_TOKEN_FILE`, `GIT_USER`, `GIT_TOKEN_HOST` | unset, `x-access-token`, `https://github.com/` | Private repo access. Sent as an HTTP header through Git's environment config, never on the command line. |
 | `SCORE_API_SECRET` or `SCORE_API_SECRET_FILE` | unset | score-api's shared secret, sent as `X-App-Secret`. Without it the agent lists capabilities but cannot execute them. |
 | `SCORE_API_URL` | `http://score-api.default.svc.cluster.local` | score-api base URL. Use the in-cluster Service: score-api's ingress times out after 120 s. |
@@ -119,8 +119,8 @@ Wait for `Agent found N capabilities at <commit>` in the log. One-shot crawl wit
 
 1. **Build and push the image** from this directory (PowerShell or any shell):
    ```sh
-   podman build -t docker.io/abdurrahman126/score-capability-agent:0.2.0 .
-   podman push docker.io/abdurrahman126/score-capability-agent:0.2.0
+   podman build -t docker.io/abdurrahman126/score-capability-agent:0.2.6 .
+   podman push docker.io/abdurrahman126/score-capability-agent:0.2.6
    ```
 2. **Set up Vault** as described at the top of [`k8s/vault-policy.hcl`](k8s/vault-policy.hcl): a policy, a `capability-agent-role` bound to the `score-capability-agent` service account, and `secret/capability-agent/config` with `a2a_token`, `anthropic_api_key` and `git_token` (a read-only GitHub token for both repos). The policy also reads score-api's `secret/score-api/app-secret`, so the agent can call score-api.
 3. **Apply the single manifest** [`k8s/capability-agent.yaml`](k8s/capability-agent.yaml) (ServiceAccount, Deployment, Service, TLS Issuer/Certificate, Ingress). In Rancher: cluster → Import YAML → namespace `default`. Or:

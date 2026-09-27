@@ -64,6 +64,14 @@ WORKLOAD_SCHEMA = {"type": "string", "pattern": "^[a-z0-9]([a-z0-9-]{0,38}[a-z0-
 IMAGE_SCHEMA = {"type": "string", "pattern": "^[A-Za-z0-9._/:@-]+$",
                 "description": "Container image of the workload, e.g. nginx:latest."}
 REGIONS = ["us-east-1", "us-east-2", "us-west-1", "us-west-2"]
+# Values score-api's /cgi-bin/score accepts (its allowlists are lowercase and case-sensitive).
+SCORE_API_ALLOWED = {
+    "environment": ["dev", "staging", "uat", "dr", "prod"],
+    "instance_class": ["db.t3.micro", "db.t3.small", "db.t3.medium", "db.t4g.micro", "db.t4g.small"],
+    "region": REGIONS,
+    "plane": ["resource", "dev", "observability", "integration", "security", "unspecified"],
+}
+STORAGE_GB_RANGE = (1, 20)
 
 
 def _action_tools(agent: str) -> list[dict[str, Any]]:
@@ -102,7 +110,7 @@ def _action_tools(agent: str) -> list[dict[str, Any]]:
 
 
 def tool_manifest(report: dict[str, Any], platform: str = "valueops", agent: str = "infra",
-                  actions: bool = False) -> dict[str, Any]:
+                  actions: bool = False, plane: str = "resource") -> dict[str, Any]:
     """Each Score capability as a discoverable tool whose inputSchema is the score.yaml params it accepts.
 
     actions: the agent can execute tools through score-api, so provision tools also take the workload and image,
@@ -131,6 +139,9 @@ def tool_manifest(report: dict[str, Any], platform: str = "valueops", agent: str
                 schema["default"] = param["default"]
             properties[param["name"]] = schema
         if actions and entry and entry["score_type"] in EXECUTABLE_SCORE_TYPES:
+            for field, allowed in SCORE_API_ALLOWED.items():
+                if field in properties:
+                    properties[field] = {**properties[field], "enum": allowed}
             properties = {"workload": WORKLOAD_SCHEMA, "image": IMAGE_SCHEMA, **properties}
             required = ["workload", "image", *required]
         tools.append({
@@ -149,6 +160,7 @@ def tool_manifest(report: dict[str, Any], platform: str = "valueops", agent: str
         tools.extend(_action_tools(agent))
     digest = hashlib.sha256(json.dumps(tools, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return {"provider": platform, "discoveryMode": "agent-discovery-live", "manifestDigest": f"sha256:{digest}",
+            "plane": plane,
             "tools": tools}
 
 
@@ -344,6 +356,20 @@ def prepare_provision(report: dict[str, Any], tool_id: str, arguments: dict[str,
     arguments = dict(arguments)
     workload, image = arguments.pop("workload", None), arguments.pop("image", None)
     issues = []
+    # Forms often send display labels ("Resource", "Dev"); score-api only accepts lowercase.
+    for name, allowed in SCORE_API_ALLOWED.items():
+        if isinstance(arguments.get(name), str):
+            arguments[name] = arguments[name].strip().lower()
+            if arguments[name] not in allowed:
+                issues.append({"field": name, "problem": f"must be one of {allowed}"})
+    if arguments.get("storage_gb") is not None:
+        low, high = STORAGE_GB_RANGE
+        try:
+            size = float(arguments["storage_gb"])
+        except (TypeError, ValueError):
+            size = None
+        if size is None or not size.is_integer() or not low <= size <= high:
+            issues.append({"field": "storage_gb", "problem": f"must be a whole number from {low} to {high}"})
     for field, value, schema in (("workload", workload, WORKLOAD_SCHEMA), ("image", image, IMAGE_SCHEMA)):
         if not value:
             issues.append({"field": field, "problem": "required"})

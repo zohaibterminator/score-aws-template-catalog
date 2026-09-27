@@ -101,7 +101,8 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 
         # Default listing is the tool manifest other agents discover.
         text, manifest = reply(send(client, {"data": {"skill": "list_capabilities"}}))
-        assert set(manifest) == {"provider", "discoveryMode", "manifestDigest", "tools"}
+        assert set(manifest) == {"provider", "discoveryMode", "manifestDigest", "plane", "tools"}
+        assert manifest["plane"] == "resource"
         assert manifest["provider"] == "valueops" and manifest["discoveryMode"] == "agent-discovery-live"
         assert manifest["manifestDigest"].startswith("sha256:") and len(manifest["manifestDigest"]) == 71
         [tool] = manifest["tools"]

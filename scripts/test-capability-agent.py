@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Check the capability agent against throwaway Git repositories, without network or an LLM."""
+import json
 from pathlib import Path
 import tempfile
 
@@ -83,8 +84,14 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             pass
         else:
             raise AssertionError(f"read_file allowed {bad}")
+    assert tools["submit_capabilities"].to_dict()["input_schema"]["properties"]["capabilities"]["type"] == "array"
     tools["submit_capabilities"].call({"capabilities": draft["capabilities"][:1]})
     assert captured["draft"]["capabilities"][0]["id"] == "terraform-aws"
+    # Some models send the list as a JSON string, or the whole {"capabilities": [...]} object as one.
+    for encoded in (json.dumps(draft["capabilities"][:1]), json.dumps({"capabilities": draft["capabilities"][:1]})):
+        captured.clear()
+        tools["submit_capabilities"].call({"capabilities": encoded})
+        assert captured["draft"]["capabilities"][0]["id"] == "terraform-aws", encoded[:40]
     try:
         tools["submit_capabilities"].call({"capabilities": [{"id": "x"}]})
     except Exception:

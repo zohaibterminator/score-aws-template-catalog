@@ -14,7 +14,7 @@ import httpx
 from capability_fixtures import make_fixture
 from starlette.testclient import TestClient
 
-from a2a_server import build_app
+from a2a_server import build_app, masked
 from score_api import ScoreApi
 from store import CapabilityStore
 
@@ -76,6 +76,10 @@ def message(result: dict) -> tuple[str, dict]:
     return parts[0]["text"], (parts[1]["data"] if len(parts) > 1 else {})
 
 
+assert masked({"access_key_id": AKID, "secret_access_key": SECRET_KEY, "region": "us-east-1", "plane": "Resource"}) \
+    == {"access_key_id": "***", "secret_access_key": "***", "region": "us-east-1", "plane": "Resource"}
+
+
 def fake_crawl(facts: dict, roots: dict) -> dict:
     return facts
 
@@ -109,6 +113,42 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         assert "pushed run 1700000000" in text and data["guid"] == "g-1"
         assert calls[-1] == ("score", {"workload": "checkout-api", "image": "nginx:latest", "db": {
             "region": "us-east-1", "environment": "prod", "instance_class": "db.t3.micro", "storage_gb": 10}}), calls[-1]
+
+        # Backends that send the request as a JSON string, in a data part or a text part, get it executed too.
+        request = {"skill": "call_tool", "tool": PROVISION,
+                   "arguments": {"workload": "orders-api", "image": "nginx:alpine", "storage_gb": 5}}
+        for part in ({"data": json.dumps(request)}, {"text": json.dumps(request)}):
+            result = rpc(client, "SendMessage", {"message": {
+                "messageId": str(uuid.uuid4()), "role": "ROLE_USER", "parts": [part]}})
+            assert "task" in result, (part, result)
+            assert task_outcome(result["task"])[0] == "TASK_STATE_COMPLETED"
+            assert calls[-1][0] == "score" and calls[-1][1]["workload"] == "orders-api", calls[-1]
+
+        # ValueOps sends the tool id as the skill, with arguments nested or as top-level fields.
+        args = {"workload": "billing-api", "image": "nginx:alpine", "environment": "dev"}
+        for data in ({"skill": PROVISION, "arguments": args}, {"skill": PROVISION, "input": args},
+                     {"skill": PROVISION, **args}):
+            result = rpc(client, "SendMessage", {"message": {
+                "messageId": str(uuid.uuid4()), "role": "ROLE_USER", "parts": [{"data": data}]}})
+            assert "task" in result, (data, result)
+            assert task_outcome(result["task"])[0] == "TASK_STATE_COMPLETED"
+            assert calls[-1][0] == "score" and calls[-1][1]["workload"] == "billing-api", calls[-1]
+        state, text, _ = task_outcome(rpc(client, "SendMessage", {"message": {
+            "messageId": str(uuid.uuid4()), "role": "ROLE_USER", "parts": [{"data": {"skill": DELETE}}]}})["task"])
+        assert text.startswith("Dry run"), text
+
+        # Display labels are lowercased for score-api; values outside its allowlists are rejected here.
+        assert schema["properties"]["environment"]["enum"] == ["dev", "staging", "uat", "dr", "prod"]
+        task = call(client, PROVISION, {"workload": "shop", "image": "nginx", "environment": "Dev",
+                                         "region": " US-EAST-1 "})["task"]
+        assert task_outcome(task)[0] == "TASK_STATE_COMPLETED"
+        assert calls[-1][1]["db"]["environment"] == "dev" and calls[-1][1]["db"]["region"] == "us-east-1", calls[-1]
+        before = len(calls)
+        _, data = message(call(client, PROVISION, {"workload": "shop", "image": "nginx", "environment": "qa",
+                                                    "storage_gb": 7.5}))
+        problems = {i["field"]: i["problem"] for i in data["issues"]}
+        assert problems["environment"].startswith("must be one of") and "whole number" in problems["storage_gb"]
+        assert len(calls) == before
 
         # Invalid requests are rejected before score-api is called.
         before = len(calls)
