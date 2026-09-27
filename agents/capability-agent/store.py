@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 from collections import deque
+import copy
 from dataclasses import dataclass, field
 import logging
 from pathlib import Path
+import re
 import shutil
+import subprocess
 import threading
 import time
 from typing import Any, Callable
@@ -15,6 +18,17 @@ from git_source import checkout, remote_commit
 
 log = logging.getLogger(__name__)
 Describer = Callable[[dict[str, Any], dict[str, Path]], dict[str, Any]]
+
+# Files in the Score repo that define capabilities. Anything else there (state.yaml, workloads/,
+# generated/, manifests) changes on every provisioning request and does not change what can be deployed.
+CAPABILITY_FILE = re.compile(r"(^|/)\.score-k8s/[^/]+\.provisioners\.ya?ml$|(^|/)README[^/]*$", re.I)
+
+
+def _changed_files(repo: Path, old: str, new: str) -> list[str] | None:
+    """Paths changed between two commits of a checkout, or None if Git cannot tell."""
+    result = subprocess.run(["git", "-C", str(repo), "diff", "--name-only", old, new],
+                            capture_output=True, text=True)
+    return result.stdout.split() if result.returncode == 0 else None
 
 
 @dataclass(frozen=True)
@@ -53,6 +67,24 @@ class CapabilityStore:
             self._checked_at = time.time()
             return self._snapshot
 
+    def _reuse(self, modules, score) -> dict[str, Any] | None:
+        """The previous report, when only non-capability files changed in the Score repo since it was built.
+
+        score-api commits request state to the Score repo on every provisioning request; re-crawling with
+        the LLM for those would cost minutes and tokens each time without changing any capability.
+        """
+        previous = self._snapshot
+        if previous is None or score is None or previous.commits[0] != modules.commit:
+            return None
+        changed = _changed_files(score.path, previous.commits[1], score.commit) if previous.commits[1] else None
+        if changed is None or any(CAPABILITY_FILE.search(path) for path in changed):
+            return None
+        log.info("Score repo moved to %s with no capability changes (%d files); reusing the crawl",
+                 score.commit, len(changed))
+        report = copy.deepcopy(previous.report)
+        report["sources"]["score_workloads"] = score.describe()
+        return report
+
     def _crawl(self) -> Snapshot:
         self._builds += 1
         target = self.workdir / f"build-{self._builds}"
@@ -61,7 +93,7 @@ class CapabilityStore:
             score = checkout(self.score_repo, self.score_ref, target / "score") if self.score_repo else None
             roots = {"modules": modules.path} | ({"score": score.path} if score else {})
             log.info("Agent crawling %s@%s", self.module_repo, modules.commit)
-            report = self.describe(report_builder.build(modules, score), roots)
+            report = self._reuse(modules, score) or self.describe(report_builder.build(modules, score), roots)
         except Exception:
             # Nothing is cached, so the next request crawls again.
             shutil.rmtree(target, ignore_errors=True)

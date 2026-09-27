@@ -24,7 +24,8 @@ Other agent ──A2A──▶ "What capabilities do you have?"
 Other agent ◀──A2A── capability list (text + JSON), with the Git commit it came from
 ```
 
-- **Crawl on demand, cached per commit.** The agent re-crawls only when the watched branch or tag points to a new commit, so repeat questions are answered instantly and the LLM runs once per change. A failed crawl is reported to the caller and not cached, so the next request tries again.
+- **Crawl on demand, cached per commit.** The agent re-crawls only when the watched branch or tag points to a new commit, so repeat questions are answered instantly and the LLM runs once per change. When only the Score repo moved and none of its `.score-k8s/*.provisioners.yaml` or README files changed (score-api commits request state on every provisioning request), the previous crawl is reused without calling Claude.
+- **Every Score project in the Score repo.** Provisioners are read from the root `.score-k8s/` and from project folders such as `eks/.score-k8s/`, and matched to modules by their Terraform CR `path` (`./terraform-aws`, `./eks`). A failed crawl is reported to the caller and not cached, so the next request tries again.
 - **The agent does the crawling.** It reads the Terraform and provisioner files itself, including comments. The HCL parser is one of its tools, so it can check what it read against exact variables, resources and conditions.
 - **Grounded output.** Any capability, variable, attribute or constraint the LLM names that doesn't exist in the repos is dropped. Constraints have to cite a file that exists.
 
@@ -64,6 +65,7 @@ When `SCORE_API_SECRET` is set, the manifest also lists what the agent can execu
 | Tool id | score-api endpoint | Arguments | Reply |
 | --- | --- | --- | --- |
 | `infra.aws_terraform.provision_postgres` | `/cgi-bin/score` | `workload`, `image` (required), plus any params from the `inputSchema` | Task. Artifact `score-api-response` has `run_id` and `guid`. |
+| `infra.aws_terraform.provision_eks` | `/cgi-bin/eks` | `workload`, `cluster_name`, `aws_account_id`, `region`, `kubernetes_version` (a string, e.g. `"1.34"`) and `api_allowed_cidrs` (required), plus the optional network, node, environment and plane params | Task. Artifact has `terraform_cr` (`eks-<guid>`), `namespace` and `output_secret`. The cluster takes about 15-20 minutes to become ready. |
 | `infra.score_api.update_aws_credentials` | `/cgi-bin/update-aws-creds` | `access_key_id`, `secret_access_key`, `region` | Message (not a task, so the credentials are never kept in the task store) |
 | `infra.score_api.delete_all_resources` | `/cgi-bin/delete-all` | `confirm: "DELETE-ALL"`; leave it out for a dry run | Task. Takes 5-20 minutes. |
 
@@ -93,7 +95,7 @@ When `SCORE_API_SECRET` is set, the manifest also lists what the agent can execu
 | `ANTHROPIC_API_KEY` or `ANTHROPIC_API_KEY_FILE` | required | Claude API key |
 | `ANTHROPIC_MODEL` | `claude-opus-5` | Any Claude model, e.g. `claude-sonnet-5` (manifest) or `claude-haiku-4-5-20251001` |
 | `A2A_AUTH_TOKEN` or `A2A_AUTH_TOKEN_FILE` | required | Bearer token for callers (`A2A_ALLOW_ANONYMOUS=true` for local testing only) |
-| `MODULE_REPO` / `MODULE_REF` | `score-tf-modules` on GitHub / default branch | Terraform repo to crawl. Pin `MODULE_REF` to a reviewed tag in production. |
+| `MODULE_REPO` / `MODULE_REF` | `score-tf-modules` on GitHub / default branch | Terraform repo to crawl (`terraform-aws/`, `eks/`). The manifest pins `MODULE_REF` to the same tag as the `score-provisioner-modules` Flux source. |
 | `SCORE_REPO` / `SCORE_REF` | unset | Score provisioner repo. Without it, the Score mapping is not reported. |
 | `GIT_CHECK_SECONDS` | `60` | How often requests may check Git for a new commit |
 | `MANIFEST_PROVIDER` / `MANIFEST_AGENT` / `MANIFEST_PLANE` | `valueops` / `infra` / `resource` | Top-level `provider`, each tool's `agent`, and the top-level `plane` in the manifest |
@@ -119,8 +121,8 @@ Wait for `Agent found N capabilities at <commit>` in the log. One-shot crawl wit
 
 1. **Build and push the image** from this directory (PowerShell or any shell):
    ```sh
-   podman build -t docker.io/abdurrahman126/score-capability-agent:0.2.6 .
-   podman push docker.io/abdurrahman126/score-capability-agent:0.2.6
+   podman build -t docker.io/abdurrahman126/score-capability-agent:0.3.0 .
+   podman push docker.io/abdurrahman126/score-capability-agent:0.3.0
    ```
 2. **Set up Vault** as described at the top of [`k8s/vault-policy.hcl`](k8s/vault-policy.hcl): a policy, a `capability-agent-role` bound to the `score-capability-agent` service account, and `secret/capability-agent/config` with `a2a_token`, `anthropic_api_key` and `git_token` (a read-only GitHub token for both repos). The policy also reads score-api's `secret/score-api/app-secret`, so the agent can call score-api.
 3. **Apply the single manifest** [`k8s/capability-agent.yaml`](k8s/capability-agent.yaml) (ServiceAccount, Deployment, Service, TLS Issuer/Certificate, Ingress). In Rancher: cluster → Import YAML → namespace `default`. Or:
@@ -137,5 +139,6 @@ The pod has no RBAC and no cloud credentials. It runs as non-root with a read-on
 - `scripts/test-capability-agent.py` covers the parsers, grounding of LLM output, and the tool sandbox.
 - `scripts/test-capability-a2a.py` covers crawl on request, caching per commit, failed crawls not being cached, auth, and the skills.
 - `scripts/test-capability-actions.py` covers `call_tool` against a fake score-api: validation before the call, provision and delete-all tasks, `returnImmediately` with `GetTask`, and credential handling.
+- `scripts/test-capability-eks.py` covers EKS: a Score project in a sub-folder, list and number defaults, the `provision_eks` tool, execution through `/cgi-bin/eks`, validation before score-api, and reusing the crawl when score-api only committed request state.
 
-All three run against throwaway Git repos with the LLM stubbed out, so they need no network or API key, and all run from `scripts/validate.sh`. They check the wiring, not the model's judgement. Check that by running locally with a real key.
+All four run against throwaway Git repos with the LLM stubbed out, so they need no network or API key, and all run from `scripts/validate.sh`. They check the wiring, not the model's judgement. Check that by running locally with a real key.

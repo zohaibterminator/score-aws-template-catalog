@@ -157,7 +157,10 @@ def agent_card(public_url: str, auth: bool, actions: bool = False) -> AgentCard:
                         "before score-api is called.",
             tags=["score", "provisioning"], input_modes=["application/json"], output_modes=["application/json"],
             examples=['{"skill": "call_tool", "tool": "infra.aws_terraform.provision_postgres", "arguments": '
-                      '{"workload": "checkout-api", "image": "nginx:latest", "environment": "dev"}}'],
+                      '{"workload": "checkout-api", "image": "nginx:latest", "environment": "dev"}}',
+                      '{"skill": "call_tool", "tool": "infra.aws_terraform.provision_eks", "arguments": '
+                      '{"workload": "team-eks", "cluster_name": "team-eks", "aws_account_id": "123456789012", '
+                      '"region": "us-east-1", "kubernetes_version": "1.34", "api_allowed_cidrs": ["203.0.113.10/32"]}}'],
         ))
     if auth:
         card.security_schemes["bearer"].CopyFrom(
@@ -172,9 +175,15 @@ def _outcome(result: dict[str, Any]) -> str:
     if status == "error":
         return f"score-api failed at {result.get('stage', '?')}: {result.get('msg', '')}"
     if status == "dry_run":
-        return (f"Dry run: would delete workloads [{result.get('would_delete_workloads', '')}]. "
+        eks = str(result.get("would_delete_eks_workloads") or "").strip()
+        return (f"Dry run: would delete workloads [{result.get('would_delete_workloads', '')}]"
+                + (f" and EKS clusters [{eks}]" if eks else "") + ". "
                 f'Send arguments {{"confirm": "{DELETE_CONFIRMATION}"}} to delete them.')
-    if "run_id" in result:
+    if str(result.get("terraform_cr", "")).startswith("eks-"):
+        line = (f"score-api published {result['terraform_cr']} in namespace {result.get('namespace')}; Flux and "
+                "tofu-controller now create or update the VPC, EKS cluster and node group (about 15-20 minutes). "
+                f"Outputs will be in Secret {result.get('output_secret')}.")
+    elif "run_id" in result:
         line = (f"score-api pushed run {result['run_id']} (guid {result.get('guid')}); Flux and tofu-controller "
                 "now create or update the RDS instance.")
     else:
@@ -274,8 +283,11 @@ class CapabilityExecutor(AgentExecutor):
             return self._parts(f"{plan['verdict']}, nothing was provisioned ({issues})", plan)
         summary = f"Submitting {tool} for workload {plan['workload']} with {plan['params']}"
         log.info(summary)
-        await self._run_task(context, event_queue, summary,
-                             self.score_api.score(plan["workload"], plan["image"], plan["params"]))
+        if plan["endpoint"] == "eks":
+            operation = self.score_api.eks(plan["workload"], plan["params"])
+        else:
+            operation = self.score_api.score(plan["workload"], plan["image"], plan["params"])
+        await self._run_task(context, event_queue, summary, operation)
         return None
 
     async def _run_task(self, context: RequestContext, event_queue: EventQueue, summary: str, operation) -> None:

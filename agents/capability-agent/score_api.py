@@ -54,6 +54,10 @@ class ScoreApi:
             (body if name in TOP_LEVEL_PARAMS else body["db"])[name] = value
         return await self._post("score", body)
 
+    async def eks(self, workload: str, params: dict[str, Any]) -> dict[str, Any]:
+        """/cgi-bin/eks takes the workload and the Score params flat in one object."""
+        return await self._post("eks", {"workload": workload, **params})
+
     async def update_aws_creds(self, access_key_id: str, secret_access_key: str, region: str) -> dict[str, Any]:
         return await self._post("update-aws-creds", {"access_key_id": access_key_id,
                                                      "secret_access_key": secret_access_key, "region": region})

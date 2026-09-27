@@ -10,7 +10,23 @@ import yaml
 PARAM_REF = re.compile(r"""\.Params\.(\w+)|index\s+\.Params\s+"(\w+)\"""")
 INIT_REF = re.compile(r"\.Init\.(\w+)")
 STATE_REF = re.compile(r"\.State\.(\w+)")
-DEFAULT = re.compile(r'default\s+"([^"]*)"')
+# `| default <value>` in a template: a quoted string, a number, `list` or `(list "a" "b")`.
+DEFAULT = re.compile(r'\|\s*default\s+(?:"(?P<str>[^"]*)"|(?P<num>-?\d+(?:\.\d+)?)\b|\(list(?P<list>(?:\s+"[^"]*")*)\s*\)|(?P<empty>list)\b)')
+
+
+def _default(value: str) -> Any:
+    """The default a template applies to a param, or None when it has none (the param is required)."""
+    match = DEFAULT.search(value)
+    if not match:
+        return None
+    if match.group("str") is not None:
+        return match.group("str")
+    if match.group("num") is not None:
+        number = float(match.group("num"))
+        return int(number) if number.is_integer() else number
+    if match.group("list") is not None:
+        return re.findall(r'"([^"]*)"', match.group("list"))
+    return []
 SCORE_GENERATED = {".Guid": "resource guid", ".Uid": "resource uid", ".SourceWorkload": "workload name"}
 SECRET_OUTPUT = re.compile(r'encodeSecretRef\s+\(printf\s+"([\w-]+)-%s"\s+\.Guid\)\s+"(\w+)"')
 
@@ -42,9 +58,7 @@ def _block(text: str, key: str) -> str:
 
 def _trace(value: str, init: dict[str, str], state: dict[str, str], depth: int = 0) -> dict[str, Any]:
     if match := PARAM_REF.search(value):
-        default = DEFAULT.search(value)
-        return {"set_by": "developer", "score_param": match.group(1) or match.group(2),
-                "default": default.group(1) if default else None}
+        return {"set_by": "developer", "score_param": match.group(1) or match.group(2), "default": _default(value)}
     if depth < 4 and (match := INIT_REF.search(value)) and match.group(1) in init:
         return _trace(init[match.group(1)], init, state, depth + 1)
     if depth < 4 and (match := STATE_REF.search(value)) and match.group(1) in state:
@@ -107,8 +121,10 @@ def _provisioner(item: dict[str, Any], file: str) -> dict[str, Any] | None:
 
 
 def collect(root: Path) -> list[dict[str, Any]]:
+    """Provisioners of every Score project in the repo: the root .score-k8s/ and project folders such as eks/."""
     bindings = []
-    for path in sorted((root / ".score-k8s").glob("*.provisioners.yaml")):
+    paths = [p for p in root.glob("**/.score-k8s/*.provisioners.yaml") if ".git" not in p.relative_to(root).parts]
+    for path in sorted(paths):
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or []
         for item in data if isinstance(data, list) else []:
             if isinstance(item, dict) and (binding := _provisioner(item, path.relative_to(root).as_posix())):

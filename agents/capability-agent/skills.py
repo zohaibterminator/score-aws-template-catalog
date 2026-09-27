@@ -56,11 +56,9 @@ def _tool_name(capability: dict[str, Any], entry: dict[str, Any] | None) -> tupl
     return provider, f"provision_{_slug(entry['score_type'] if entry else capability['id'])}"
 
 
-# score-api builds a score.yaml around a PostgreSQL resource, so only that capability can be executed.
-EXECUTABLE_SCORE_TYPES = {"postgres"}
 WORKLOAD_SCHEMA = {"type": "string", "pattern": "^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$",
                    "description": "Score workload name (metadata.name): lowercase letters, digits and hyphens, "
-                                  "2-40 characters. Requests for the same workload update its database."}
+                                  "2-40 characters. Requests for the same workload update its resource."}
 IMAGE_SCHEMA = {"type": "string", "pattern": "^[A-Za-z0-9._/:@-]+$",
                 "description": "Container image of the workload, e.g. nginx:latest."}
 REGIONS = ["us-east-1", "us-east-2", "us-west-1", "us-west-2"]
@@ -72,6 +70,20 @@ SCORE_API_ALLOWED = {
     "plane": ["resource", "dev", "observability", "integration", "security", "unspecified"],
 }
 STORAGE_GB_RANGE = (1, 20)
+PLANES = SCORE_API_ALLOWED["plane"]
+ENVIRONMENTS = SCORE_API_ALLOWED["environment"]
+
+# Score types score-api can execute, and what each needs besides the crawled params.
+#   endpoint: score-api CGI endpoint; fields: request fields that are not Score params;
+#   allowed: lowercase allowlists enforced before the call.
+SCORE_TYPES: dict[str, dict[str, Any]] = {
+    "postgres": {"endpoint": "score", "fields": ["workload", "image"], "allowed": SCORE_API_ALLOWED},
+    # EKS: the module's own variable validations cover region, CIDRs and node sizes.
+    "eks": {"endpoint": "eks", "fields": ["workload"],
+            "allowed": {"environment": ENVIRONMENTS, "plane": PLANES}},
+}
+EXECUTABLE_SCORE_TYPES = set(SCORE_TYPES)
+FIELD_SCHEMAS = {"workload": WORKLOAD_SCHEMA, "image": IMAGE_SCHEMA}
 
 
 def _action_tools(agent: str) -> list[dict[str, Any]]:
@@ -95,10 +107,11 @@ def _action_tools(agent: str) -> list[dict[str, Any]]:
         {
             "agent": agent, "provider": "score_api", "name": "delete_all_resources",
             "id": f"{agent}.score_api.delete_all_resources",
-            "description": "Destroys every provisioned workload database: removes the Terraform resources, deletes "
-                           "the RDS instances in AWS and cleans up their Secrets. Without confirm it only reports "
-                           "what would be deleted. Takes 5-20 minutes; send it with returnImmediately and poll "
-                           "GetTask.",
+            "description": "Destroys everything provisioned through score-api: every RDS database and every EKS "
+                           "cluster (with its VPC and node group). Removes the Terraform resources so terraform "
+                           "destroy deletes them in AWS, and cleans up their Secrets. Without confirm it only reports "
+                           "what would be deleted. Takes 5-20 minutes (EKS clusters keep destroying for ~15 minutes "
+                           "after it returns); send it with returnImmediately and poll GetTask.",
             "inputSchema": {"type": "object", "properties": {
                 "confirm": {"type": "string", "enum": ["DELETE-ALL"],
                             "description": 'Set to "DELETE-ALL" to delete. Leave it out for a dry run.'},
@@ -139,11 +152,12 @@ def tool_manifest(report: dict[str, Any], platform: str = "valueops", agent: str
                 schema["default"] = param["default"]
             properties[param["name"]] = schema
         if actions and entry and entry["score_type"] in EXECUTABLE_SCORE_TYPES:
-            for field, allowed in SCORE_API_ALLOWED.items():
+            spec = SCORE_TYPES[entry["score_type"]]
+            for field, allowed in spec["allowed"].items():
                 if field in properties:
                     properties[field] = {**properties[field], "enum": allowed}
-            properties = {"workload": WORKLOAD_SCHEMA, "image": IMAGE_SCHEMA, **properties}
-            required = ["workload", "image", *required]
+            properties = {**{f: FIELD_SCHEMAS[f] for f in spec["fields"]}, **properties}
+            required = [*spec["fields"], *required]
         tools.append({
             "agent": agent,
             "provider": provider,
@@ -353,16 +367,20 @@ def prepare_provision(report: dict[str, Any], tool_id: str, arguments: dict[str,
         return {"verdict": "unsupported", "issues": [
             {"field": "tool", "problem": f"{tool_id} is listed but score-api cannot provision it yet"}]}
 
+    spec = SCORE_TYPES[entry["score_type"]]
     arguments = dict(arguments)
-    workload, image = arguments.pop("workload", None), arguments.pop("image", None)
+    fields = {f: arguments.pop(f, None) for f in spec["fields"]}
     issues = []
     # Forms often send display labels ("Resource", "Dev"); score-api only accepts lowercase.
-    for name, allowed in SCORE_API_ALLOWED.items():
+    for name, allowed in spec["allowed"].items():
         if isinstance(arguments.get(name), str):
             arguments[name] = arguments[name].strip().lower()
             if arguments[name] not in allowed:
                 issues.append({"field": name, "problem": f"must be one of {allowed}"})
-    if arguments.get("storage_gb") is not None:
+    # A JSON number loses trailing zeros (1.30 becomes 1.3), so versions must be strings.
+    if "kubernetes_version" in arguments and not isinstance(arguments["kubernetes_version"], str):
+        issues.append({"field": "kubernetes_version", "problem": 'must be a string such as "1.34"'})
+    if entry["score_type"] == "postgres" and arguments.get("storage_gb") is not None:
         low, high = STORAGE_GB_RANGE
         try:
             size = float(arguments["storage_gb"])
@@ -370,16 +388,18 @@ def prepare_provision(report: dict[str, Any], tool_id: str, arguments: dict[str,
             size = None
         if size is None or not size.is_integer() or not low <= size <= high:
             issues.append({"field": "storage_gb", "problem": f"must be a whole number from {low} to {high}"})
-    for field, value, schema in (("workload", workload, WORKLOAD_SCHEMA), ("image", image, IMAGE_SCHEMA)):
+    for field, value in fields.items():
+        pattern = FIELD_SCHEMAS[field]["pattern"]
         if not value:
             issues.append({"field": field, "problem": "required"})
-        elif not isinstance(value, str) or not re.match(schema["pattern"], value):
-            issues.append({"field": field, "problem": f"must match {schema['pattern']}"})
+        elif not isinstance(value, str) or not re.match(pattern, value):
+            issues.append({"field": field, "problem": f"must match {pattern}"})
     check = check_request(report, {"score_type": entry["score_type"], "score_class": entry["score_class"],
                                    "params": arguments})
     issues += check["issues"]
     if issues:
         return {"verdict": "rejected", "issues": issues, "source_commit": check.get("source_commit")}
-    return {"verdict": "accepted", "workload": workload, "image": image,
+    return {"verdict": "accepted", "score_type": entry["score_type"], "endpoint": spec["endpoint"],
+            "workload": fields.get("workload"), "image": fields.get("image"),
             "params": check["score_resource"]["params"], "applied_defaults": check["applied_defaults"],
             "source_commit": check["source_commit"]}

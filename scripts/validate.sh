@@ -32,6 +32,7 @@ fi
 python "$ROOT/scripts/test-capability-agent.py"
 python "$ROOT/scripts/test-capability-a2a.py"
 python "$ROOT/scripts/test-capability-actions.py"
+python "$ROOT/scripts/test-capability-eks.py"
 
 # Render the Score provisioners in a throwaway project (never in a workload repository).
 if command -v score-k8s >/dev/null 2>&1; then
