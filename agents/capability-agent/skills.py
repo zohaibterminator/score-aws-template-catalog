@@ -119,6 +119,24 @@ def _action_tools(agent: str) -> list[dict[str, Any]]:
             "annotations": {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True,
                             "openWorldHint": True},
         },
+        {
+            "agent": agent, "provider": "score_api", "name": "resource_status",
+            "id": f"{agent}.score_api.resource_status",
+            "description": "Reports the live state of provisioned resources right now (RDS databases and EKS "
+                           "clusters): each Terraform resource's workload and whether it is ready, in progress, "
+                           "failed or being deleted. Use it to follow up on provisioning or deletion, e.g. to check "
+                           "whether a cluster is gone yet; task results only describe the moment a call ended.",
+            "inputSchema": {"type": "object", "properties": {
+                "capability": {"type": "string", "enum": ["rds", "eks"],
+                               "description": "Only RDS databases or only EKS clusters. Leave out for both."},
+                "workload": {**WORKLOAD_SCHEMA, "description": "Only the resources of this Score workload."},
+                "terraform_cr": {"type": "string", "pattern": "^(rds|eks)-[a-z0-9-]+$",
+                                 "description": "One resource by its Terraform CR name, e.g. eks-<guid>. "
+                                                "An empty result means it no longer exists."},
+            }, "required": [], "additionalProperties": False},
+            "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True,
+                            "openWorldHint": True},
+        },
     ]
 
 

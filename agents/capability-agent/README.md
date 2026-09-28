@@ -66,6 +66,7 @@ When `SCORE_API_SECRET` is set, the manifest also lists what the agent can execu
 | --- | --- | --- | --- |
 | `infra.aws_terraform.provision_postgres` | `/cgi-bin/score` | `workload`, `image` (required), plus any params from the `inputSchema` | Task. Artifact `score-api-response` has `run_id` and `guid`. |
 | `infra.aws_terraform.provision_eks` | `/cgi-bin/eks` | `workload`, `cluster_name`, `aws_account_id`, `region`, `kubernetes_version` (a string, e.g. `"1.34"`) and `api_allowed_cidrs` (required), plus the optional network, node, environment and plane params | Task. Artifact has `terraform_cr` (`eks-<guid>`), `namespace` and `output_secret`. The cluster takes about 15-20 minutes to become ready. |
+| `infra.score_api.resource_status` | `/cgi-bin/status` | optional `capability` (`rds`/`eks`), `workload`, `terraform_cr` | Message (read-only, no task): the live state of each matching Terraform resource (`ready`, `in_progress`, `failed`, `deleting`). An empty result for a `terraform_cr` means it is gone. Task results only describe the moment a call ended; use this to follow up. |
 | `infra.score_api.update_aws_credentials` | `/cgi-bin/update-aws-creds` | `access_key_id`, `secret_access_key`, `region` | Message (not a task, so the credentials are never kept in the task store) |
 | `infra.score_api.delete_all_resources` | `/cgi-bin/delete-all` | `confirm: "DELETE-ALL"`; leave it out for a dry run | Task. Takes 5-20 minutes. |
 
@@ -121,8 +122,8 @@ Wait for `Agent found N capabilities at <commit>` in the log. One-shot crawl wit
 
 1. **Build and push the image** from this directory (PowerShell or any shell):
    ```sh
-   podman build -t docker.io/abdurrahman126/score-capability-agent:0.3.1 .
-   podman push docker.io/abdurrahman126/score-capability-agent:0.3.1
+   podman build -t docker.io/abdurrahman126/score-capability-agent:0.3.2 .
+   podman push docker.io/abdurrahman126/score-capability-agent:0.3.2
    ```
 2. **Set up Vault** as described at the top of [`k8s/vault-policy.hcl`](k8s/vault-policy.hcl): a policy, a `capability-agent-role` bound to the `score-capability-agent` service account, and `secret/capability-agent/config` with `a2a_token`, `anthropic_api_key` and `git_token` (a read-only GitHub token for both repos). The policy also reads score-api's `secret/score-api/app-secret`, so the agent can call score-api.
 3. **Apply the single manifest** [`k8s/capability-agent.yaml`](k8s/capability-agent.yaml) (ServiceAccount, Deployment, Service, TLS Issuer/Certificate, Ingress). In Rancher: cluster → Import YAML → namespace `default`. Or:

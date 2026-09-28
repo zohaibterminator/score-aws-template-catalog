@@ -196,6 +196,21 @@ def _outcome(result: dict[str, Any]) -> str:
     return line + (f" Warning: {msg}" if status == "partial" and msg and msg not in line else "")
 
 
+def _status_summary(result: dict[str, Any], filters: dict[str, Any]) -> str:
+    """One line for a /cgi-bin/status answer: the live state, not a snapshot of an earlier call."""
+    if result.get("status") != "ok":
+        return f"score-api failed at {result.get('stage', '?')}: {result.get('msg', '')}"
+    when = result.get("checked_at", "now")
+    scope = ", ".join(f"{k}={v}" for k, v in filters.items()) or "all resources"
+    items = result.get("resources") or []
+    if not items:
+        return f"Nothing exists for {scope} as of {when}" + (" (it is gone)." if filters.get("terraform_cr") else ".")
+    lines = "; ".join(f"{r['terraform_cr']} ({r.get('workload') or '?'}): {r['state']}"
+                      + (f" - {r['message']}" if r["state"] in ("failed", "in_progress") and r.get("message") else "")
+                      for r in items)
+    return f"{len(items)} resource(s) for {scope} as of {when}: {lines}."
+
+
 def _delete_all_outcome(result: dict[str, Any]) -> str:
     """Summary of a confirmed delete-all. It describes the moment the call ended: EKS destroys that were
     still running then keep going in the background, so it must not read as the current state."""
@@ -289,11 +304,27 @@ class CapabilityExecutor(AgentExecutor):
                 return self._parts(str(exc))
             return self._parts(_outcome(result), result)
 
+        if tool == prefix + "resource_status":
+            # Read-only and quick: answered directly, not as a task.
+            filters = {k: arguments[k] for k in ("capability", "workload", "terraform_cr") if arguments.get(k)}
+            unknown = sorted(set(arguments) - {"capability", "workload", "terraform_cr"})
+            problems = [f"unknown argument {k!r}" for k in unknown]
+            if filters.get("capability") not in (None, "rds", "eks"):
+                problems.append("capability must be rds or eks")
+            if problems:
+                return self._parts("rejected: " + "; ".join(problems), {"verdict": "rejected", "issues": problems})
+            try:
+                result = await self.score_api.status(filters)
+            except ScoreApiError as exc:
+                return self._parts(str(exc))
+            return self._parts(_status_summary(result, filters), result)
+
         if tool == prefix + "delete_all_resources":
             confirm = arguments.get("confirm")
             if confirm not in (None, DELETE_CONFIRMATION):
                 return self._parts(f'confirm must be "{DELETE_CONFIRMATION}", or left out for a dry run.')
-            summary = "Deleting every workload database" if confirm else "Checking what delete-all would remove"
+            summary = ("Deleting every RDS database and EKS cluster" if confirm
+                       else "Checking what delete-all would remove")
             await self._run_task(context, event_queue, summary, self.score_api.delete_all(confirm))
             return None
 

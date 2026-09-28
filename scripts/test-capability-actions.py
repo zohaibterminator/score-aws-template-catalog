@@ -21,6 +21,7 @@ from store import CapabilityStore
 TOKEN, APP_SECRET = "test-token", "app-secret"
 PROVISION = "infra.aws_terraform.provision_postgres"
 CREDS, DELETE = "infra.score_api.update_aws_credentials", "infra.score_api.delete_all_resources"
+STATUS = "infra.score_api.resource_status"
 AKID, SECRET_KEY = "AKIAABCDEFGHIJKLMNOP", "abcdEFGHijklMNOPqrstUVWXyz0123456789/+=="
 calls: list[tuple[str, dict]] = []
 score_api_status = "ok"
@@ -36,6 +37,14 @@ async def fake_score_api(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"status": "ok", "run_id": 1700000000, "guid": "g-1", "db_persisted": True})
     if endpoint == "update-aws-creds":
         return httpx.Response(200, json={"status": "ok", "verified": True, "reconciled": "rds-g-1 "})
+    if endpoint == "status":
+        live = [{"terraform_cr": "eks-111", "capability": "eks", "workload": "team-eks", "state": "deleting",
+                 "ready": "Unknown", "reason": "Progressing", "message": "Deletion in progress"},
+                {"terraform_cr": "rds-222", "capability": "rds", "workload": "orders", "state": "ready",
+                 "ready": "True", "reason": "TerraformOutputsWritten", "message": "Outputs written"}]
+        items = [r for r in live if all(r.get(k) == v for k, v in body.items())]
+        return httpx.Response(200, json={"status": "ok", "namespace": "default", "checked_at": "2026-09-28T10:00:00Z",
+                                         "count": len(items), "found": bool(items), "resources": items})
     if endpoint == "delete-all":
         if body["confirm"] != "DELETE-ALL":
             return httpx.Response(200, json={"status": "dry_run", "would_delete_workloads": "checkout-api",
@@ -100,7 +109,8 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         _, manifest = message(rpc(client, "SendMessage", {"message": {
             "messageId": str(uuid.uuid4()), "role": "ROLE_USER", "parts": [{"data": {"skill": "list_capabilities"}}]}}))
         tools = {t["id"]: t for t in manifest["tools"]}
-        assert set(tools) == {PROVISION, CREDS, DELETE}
+        assert set(tools) == {PROVISION, CREDS, DELETE, STATUS}
+        assert tools[STATUS]["annotations"]["readOnlyHint"] is True and tools[STATUS]["inputSchema"]["required"] == []
         schema = tools[PROVISION]["inputSchema"]
         assert schema["required"] == ["workload", "image"] and {"workload", "image"} <= set(schema["properties"])
         assert tools[DELETE]["annotations"]["destructiveHint"] is True
@@ -149,6 +159,19 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         problems = {i["field"]: i["problem"] for i in data["issues"]}
         assert problems["environment"].startswith("must be one of") and "whole number" in problems["storage_gb"]
         assert len(calls) == before
+
+        # Live status: answered directly (no task), filters passed through, "gone" reported as such.
+        result = call(client, STATUS, {})
+        text, data = message(result)
+        assert "task" not in result and data["count"] == 2 and calls[-1] == ("status", {}), (result, calls[-1])
+        assert "eks-111 (team-eks): deleting" in text and "rds-222 (orders): ready" in text, text
+        text, data = message(call(client, STATUS, {"capability": "eks"}))
+        assert calls[-1] == ("status", {"capability": "eks"}) and [r["terraform_cr"] for r in data["resources"]] == ["eks-111"]
+        text, data = message(call(client, STATUS, {"terraform_cr": "eks-999"}))
+        assert data["found"] is False and "it is gone" in text, text
+        before = len(calls)
+        text, _ = message(call(client, STATUS, {"capability": "s3", "colour": "red"}))
+        assert text.startswith("rejected") and "colour" in text and len(calls) == before, text
 
         # Invalid requests are rejected before score-api is called.
         before = len(calls)

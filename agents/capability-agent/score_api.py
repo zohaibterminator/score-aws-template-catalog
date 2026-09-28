@@ -58,6 +58,10 @@ class ScoreApi:
         """/cgi-bin/eks takes the workload and the Score params flat in one object."""
         return await self._post("eks", {"workload": workload, **params})
 
+    async def status(self, filters: dict[str, Any]) -> dict[str, Any]:
+        """Live state of the Terraform CRs; filters: capability, workload, terraform_cr (all optional)."""
+        return await self._post("status", filters)
+
     async def update_aws_creds(self, access_key_id: str, secret_access_key: str, region: str) -> dict[str, Any]:
         return await self._post("update-aws-creds", {"access_key_id": access_key_id,
                                                      "secret_access_key": secret_access_key, "region": region})
