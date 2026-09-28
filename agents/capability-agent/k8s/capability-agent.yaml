@@ -59,7 +59,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: agent
-        image: docker.io/abdurrahman126/score-capability-agent:0.3.2
+        image: docker.io/abdurrahman126/score-capability-agent:0.3.3
         imagePullPolicy: Always       # re-pull when an image tag is rebuilt; switch to IfNotPresent once tags are immutable
         ports:
         - name: http
@@ -77,6 +77,8 @@ spec:
           value: https://score-capability-agent.apps.ai.cdis.systemsltd.local/
         - name: GIT_CHECK_SECONDS
           value: "60"            # how often a request may check Git for a new commit (then the agent re-crawls)
+        - name: MAX_CRAWLS_PER_HOUR    # cost guard: Claude crawls allowed per hour; failed crawls also back off 1-30 min
+          value: "6"
         - name: ANTHROPIC_MODEL
           value: claude-sonnet-5 # lighter and cheaper; claude-opus-5 gives the strongest crawl
         - name: MANIFEST_PLANE         # top-level "plane" in the tool manifest

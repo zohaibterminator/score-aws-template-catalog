@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from pathlib import Path
 import tempfile
 from typing import Annotated, Any, Callable
@@ -13,10 +14,14 @@ from pydantic import BaseModel, BeforeValidator, Field
 import report as report_builder
 from git_source import checkout
 
+log = logging.getLogger(__name__)
 DEFAULT_MODULE_REPO = "https://github.com/zohaibterminator/score-tf-modules.git"
 DEFAULT_MODEL = "claude-opus-5"
 FALLBACK_MODELS = ("claude-opus-5", "claude-fable-5")
 MAX_FILE_BYTES = 60_000
+# score-k8s's generic built-in provisioners (added by `score-k8s init`). They describe no platform capability
+# and are large (~28k tokens between two projects), so the crawl never reads them.
+SKIPPED_FILES = ("zz-default.provisioners.yaml",)
 
 
 class ParameterNote(BaseModel):
@@ -65,7 +70,8 @@ when a Score workload requests a resource. You have read-only tools over Git che
 Crawl the repositories before answering:
 1. list_files for every repository.
 2. read_file every Terraform file (*.tf) and every Score provisioner (.score-k8s/*.provisioners.yaml), \
-plus READMEs that explain them. Pay attention to comments: they often state intent and policy.
+plus READMEs that explain them. Pay attention to comments: they often state intent and policy. Read each file once;
+skip score-k8s's built-in zz-default.provisioners.yaml files, which are not platform capabilities.
 3. get_facts to check your reading against the parsed variables, resources, conditions and Score bindings.
 Then call submit_capabilities exactly once, describing every capability id from the facts:
 - summary and aws_service in plain language;
@@ -97,6 +103,7 @@ def file_tools(roots: dict[str, Path]) -> list[Callable[..., str]]:
         return "\n".join(
             p.relative_to(root).as_posix() for p in sorted(root.rglob("*"))
             if p.is_file() and not {".git", ".terraform"}.intersection(p.relative_to(root).parts)
+            and p.name not in SKIPPED_FILES
         )
 
     def read_file(repo: str, path: str) -> str:
@@ -109,6 +116,8 @@ def file_tools(roots: dict[str, Path]) -> list[Callable[..., str]]:
         target = resolve(repo, path)
         if not target.is_file():
             return f"No such file: {path}"
+        if target.name in SKIPPED_FILES:
+            return f"Skipped: {path} holds score-k8s's built-in default provisioners, not platform capabilities."
         return target.read_text(encoding="utf-8", errors="replace")[:MAX_FILE_BYTES]
 
     return [list_files, read_file]
@@ -131,8 +140,9 @@ def crawl_tools(roots: dict[str, Path], report: dict[str, Any], captured: dict[s
     return [*file_tools(roots), get_facts, submit_capabilities]
 
 
-def run_claude(system: str, prompt: str, tools: list[Callable[..., str]], model: str, max_iterations: int):
-    """Run Claude's tool loop to completion and return its final message."""
+def run_claude(system: str, prompt: str, tools: list[Callable[..., str]], model: str, max_iterations: int,
+               label: str = "claude"):
+    """Run Claude's tool loop to completion and return its final message. Logs the tokens it used."""
     import anthropic
     from anthropic import beta_tool
 
@@ -147,11 +157,22 @@ def run_claude(system: str, prompt: str, tools: list[Callable[..., str]], model:
         tools=[beta_tool(fn) for fn in tools],
         messages=[{"role": "user", "content": prompt}],
         max_iterations=max_iterations,
+        # Automatic prompt caching: each round re-sends the whole conversation (every file already read),
+        # so the cache point moves forward and earlier rounds are billed at the cache-read rate.
+        cache_control={"type": "ephemeral"},
         **fallback,
     )
-    final = None
-    for message in runner:
-        final = message
+    final, rounds = None, 0
+    used = {"input_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "output_tokens": 0}
+    try:
+        for message in runner:
+            final, rounds = message, rounds + 1
+            for key in used:
+                used[key] += getattr(message.usage, key, None) or 0
+    finally:
+        log.info("Claude %s (%s): %d rounds, input %d, cache read %d, cache write %d, output %d tokens",
+                 label, model, rounds, used["input_tokens"], used["cache_read_input_tokens"],
+                 used["cache_creation_input_tokens"], used["output_tokens"])
     if final is None:
         raise RuntimeError("Claude returned no response.")
     if final.stop_reason == "refusal":
@@ -171,6 +192,7 @@ def describe_with_llm(report: dict[str, Any], roots: dict[str, Path], model: str
         crawl_tools(roots, report, captured),
         model,
         max_iterations=40,
+        label="crawl",
     )
     if "draft" not in captured:
         raise RuntimeError("Claude did not submit capabilities.")

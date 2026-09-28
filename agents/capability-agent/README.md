@@ -98,6 +98,7 @@ When `SCORE_API_SECRET` is set, the manifest also lists what the agent can execu
 | `A2A_AUTH_TOKEN` or `A2A_AUTH_TOKEN_FILE` | required | Bearer token for callers (`A2A_ALLOW_ANONYMOUS=true` for local testing only) |
 | `MODULE_REPO` / `MODULE_REF` | `score-tf-modules` on GitHub / default branch | Terraform repo to crawl (`terraform-aws/`, `eks/`). The manifest sets `MODULE_REF=main`, so any new commit there is crawled automatically; Flux deploys from the tag on its `score-provisioner-modules` source, so a module change is advertised before it is deployed until that tag moves. |
 | `SCORE_REPO` / `SCORE_REF` | unset | Score provisioner repo. Without it, the Score mapping is not reported. |
+| `MAX_CRAWLS_PER_HOUR` | `6` | Cost guard: at most this many Claude crawls per hour. A failed crawl is retried after 1, 2, 4 ... up to 30 minutes, and the previous crawl keeps being served meanwhile. Every Claude run logs its rounds and tokens (`Claude crawl (...)`, `Claude question (...)`). |
 | `GIT_CHECK_SECONDS` | `60` | How often requests may check Git for a new commit |
 | `MANIFEST_PROVIDER` / `MANIFEST_AGENT` / `MANIFEST_PLANE` | `valueops` / `infra` / `resource` | Top-level `provider`, each tool's `agent`, and the top-level `plane` in the manifest |
 | `GIT_TOKEN` or `GIT_TOKEN_FILE`, `GIT_USER`, `GIT_TOKEN_HOST` | unset, `x-access-token`, `https://github.com/` | Private repo access. Sent as an HTTP header through Git's environment config, never on the command line. |
@@ -122,8 +123,8 @@ Wait for `Agent found N capabilities at <commit>` in the log. One-shot crawl wit
 
 1. **Build and push the image** from this directory (PowerShell or any shell):
    ```sh
-   podman build -t docker.io/abdurrahman126/score-capability-agent:0.3.2 .
-   podman push docker.io/abdurrahman126/score-capability-agent:0.3.2
+   podman build -t docker.io/abdurrahman126/score-capability-agent:0.3.3 .
+   podman push docker.io/abdurrahman126/score-capability-agent:0.3.3
    ```
 2. **Set up Vault** as described at the top of [`k8s/vault-policy.hcl`](k8s/vault-policy.hcl): a policy, a `capability-agent-role` bound to the `score-capability-agent` service account, and `secret/capability-agent/config` with `a2a_token`, `anthropic_api_key` and `git_token` (a read-only GitHub token for both repos). The policy also reads score-api's `secret/score-api/app-secret`, so the agent can call score-api.
 3. **Apply the single manifest** [`k8s/capability-agent.yaml`](k8s/capability-agent.yaml) (ServiceAccount, Deployment, Service, TLS Issuer/Certificate, Ingress). In Rancher: cluster → Import YAML → namespace `default`. Or:

@@ -81,6 +81,12 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         assert store.snapshot is None and crawls == []
         fail_next_crawl = False
 
+        # Cost guard: right after a failure the agent backs off instead of re-running a paid crawl.
+        text, _ = reply(send(client, {"data": {"skill": "list_capabilities"}}))
+        assert "next attempt in" in text and crawls == [], text
+        assert 0 < store.retry_in() <= 60
+        store._retry_at = 0.0  # the backoff has passed
+
         # The first question triggers the crawl; later questions at the same commit reuse it.
         text, data = reply(send(client, {"text": "What capabilities do you have?"}))
         assert text == "stub answer to: What capabilities do you have?"
@@ -163,6 +169,15 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         assert data["verdict"] == "rejected" and data["issues"][0]["field"] == "subnet_group", data
         [cap] = store.snapshot.report["capabilities"]
         assert any("required variable `subnet_group`" in i for i in cap["score"]["binding_issues"])
+
+        # Cost guard: once the hourly crawl budget is used up, a new commit is not crawled; the previous
+        # crawl keeps being served until the budget frees up.
+        store.max_crawls_per_hour = len(store._llm_crawls)
+        served = store.snapshot.commits
+        commit(module_repo, {"terraform-aws/main.tf": MAIN_TF + 'variable "extra" { default = "x" }' + chr(10)}, "v3")
+        reply(send(client, {"data": {"skill": "list_capabilities"}}))
+        assert len(crawls) == 2 and store.snapshot.commits == served, crawls
+        assert store.retry_in() > 0
 
     assert skills.check_request(store.snapshot.report, {"capability_id": "terraform-aws"})["verdict"] == "rejected"
 

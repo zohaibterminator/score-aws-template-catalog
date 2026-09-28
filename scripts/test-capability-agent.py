@@ -100,3 +100,56 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         raise AssertionError("an incomplete submission passed validation")
 
 print("Capability agent checks passed: Git checkout, Terraform facts, Score bindings, LLM grounding, tool sandbox.")
+
+# ---- Cost controls: skipped built-in provisioners, prompt caching, token usage logging ----
+import logging
+from types import SimpleNamespace
+
+import anthropic
+
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+    root = Path(tmp)
+    (root / ".score-k8s").mkdir()
+    (root / ".score-k8s" / "zz-default.provisioners.yaml").write_text("- huge: defaults\n", encoding="utf-8")
+    (root / ".score-k8s" / "pg.provisioners.yaml").write_text("- uri: x\n", encoding="utf-8")
+    list_files, read_file = capability_agent.file_tools({"score": root})
+    assert "zz-default" not in list_files("score") and "pg.provisioners.yaml" in list_files("score")
+    assert read_file("score", ".score-k8s/zz-default.provisioners.yaml").startswith("Skipped:")
+
+sent: dict = {}
+
+
+def fake_message(i: int, stop: str):
+    usage = SimpleNamespace(input_tokens=100 * i, cache_read_input_tokens=1000 * i,
+                            cache_creation_input_tokens=10, output_tokens=5)
+    return SimpleNamespace(usage=usage, stop_reason=stop, stop_details=None, content=[])
+
+
+class FakeClient:
+    def __init__(self, *args, **kwargs):
+        runner = lambda **kw: sent.update(kw) or iter([fake_message(1, "tool_use"), fake_message(2, "end_turn")])  # noqa: E731
+        self.beta = SimpleNamespace(messages=SimpleNamespace(tool_runner=runner))
+
+
+class Capture(logging.Handler):
+    records: list = []
+
+    def emit(self, record):
+        Capture.records.append(record.getMessage())
+
+
+real_client = anthropic.Anthropic
+anthropic.Anthropic = FakeClient
+handler = Capture()
+logging.getLogger("capability_agent").addHandler(handler)
+logging.getLogger("capability_agent").setLevel(logging.INFO)
+try:
+    capability_agent.run_claude("sys", "prompt", [], "claude-sonnet-5", max_iterations=3, label="crawl")
+finally:
+    anthropic.Anthropic = real_client
+assert sent["cache_control"] == {"type": "ephemeral"}, sent.keys()
+assert "fallbacks" not in sent  # sonnet gets no refusal fallback
+line = next(r for r in Capture.records if r.startswith("Claude crawl"))
+assert "2 rounds, input 300, cache read 3000, cache write 20, output 10 tokens" in line, line
+
+print("Capability cost controls passed: built-in provisioners skipped, prompt caching on, token usage logged.")

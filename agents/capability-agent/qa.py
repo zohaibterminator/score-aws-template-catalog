@@ -62,6 +62,7 @@ def qa_tools(snapshot: Snapshot, evidence: list[dict[str, Any]]) -> list[Callabl
 def answer(snapshot: Snapshot, question: str, model: str = DEFAULT_MODEL) -> tuple[str, list[dict[str, Any]]]:
     """Return Claude's answer and the deterministic tool results it was based on."""
     evidence: list[dict[str, Any]] = []
-    final = run_claude(SYSTEM_PROMPT, question, qa_tools(snapshot, evidence), model, max_iterations=15)
+    final = run_claude(SYSTEM_PROMPT, question, qa_tools(snapshot, evidence), model, max_iterations=15,
+                       label="question")
     text = "\n".join(block.text for block in final.content if block.type == "text").strip()
     return text, evidence

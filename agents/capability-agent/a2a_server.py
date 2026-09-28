@@ -415,8 +415,11 @@ def build_app(store: CapabilityStore, *, public_url: str, auth_token: str | None
             try:
                 await asyncio.to_thread(store.current)
             except Exception as exc:
-                log.error("Initial crawl failed, retrying in 30s: %s", exc)
-                await asyncio.sleep(30)
+                # The store backs off after failures (1, 2, 4 ... 30 min), so this loop cannot re-run paid crawls
+                # every 30 seconds; it only waits for the next allowed attempt.
+                wait = max(30.0, store.retry_in())
+                log.error("Initial crawl not ready, next check in %ds: %s", int(wait), exc)
+                await asyncio.sleep(wait)
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
@@ -467,6 +470,7 @@ def main() -> None:
         workdir=Path(os.environ.get("CHECKOUT_DIR") or tempfile.mkdtemp(prefix="capability-agent-")),
         describe=lambda report, roots: describe_with_llm(report, roots, model),
         check_interval=float(os.environ.get("GIT_CHECK_SECONDS", "60")),
+        max_crawls_per_hour=int(os.environ.get("MAX_CRAWLS_PER_HOUR", "6")),
     )
     score_api = None
     if score_api_secret := secret("SCORE_API_SECRET"):
