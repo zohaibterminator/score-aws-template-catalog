@@ -81,7 +81,12 @@ SCORE_TYPES: dict[str, dict[str, Any]] = {
     # EKS: the module's own variable validations cover region, CIDRs and node sizes.
     "eks": {"endpoint": "eks", "fields": ["workload"],
             "allowed": {"environment": ENVIRONMENTS, "plane": PLANES}},
+    # SSM bastion into an EKS VPC, requested separately from the cluster; the module validates the rest.
+    "network-access": {"endpoint": "network-access", "fields": ["workload"],
+                       "allowed": {"environment": ENVIRONMENTS, "plane": PLANES, "bastion_access_mode": ["ssm", "ssh"]}},
 }
+# Status filters: the prefix of each capability's Terraform CR names.
+CAPABILITIES = ["rds", "eks", "network-access"]
 EXECUTABLE_SCORE_TYPES = set(SCORE_TYPES)
 FIELD_SCHEMAS = {"workload": WORKLOAD_SCHEMA, "image": IMAGE_SCHEMA}
 
@@ -107,8 +112,9 @@ def _action_tools(agent: str) -> list[dict[str, Any]]:
         {
             "agent": agent, "provider": "score_api", "name": "delete_all_resources",
             "id": f"{agent}.score_api.delete_all_resources",
-            "description": "Destroys everything provisioned through score-api: every RDS database and every EKS "
-                           "cluster (with its VPC and node group). Removes the Terraform resources so terraform "
+            "description": "Destroys everything provisioned through score-api: every RDS database, every EKS "
+                           "cluster (with its VPC, node group and ingress load balancer) and every network-access "
+                           "bastion. Removes the Terraform resources so terraform "
                            "destroy deletes them in AWS, and cleans up their Secrets. Without confirm it only reports "
                            "what would be deleted. Takes 5-20 minutes (EKS clusters keep destroying for ~15 minutes "
                            "after it returns); send it with returnImmediately and poll GetTask.",
@@ -122,15 +128,16 @@ def _action_tools(agent: str) -> list[dict[str, Any]]:
         {
             "agent": agent, "provider": "score_api", "name": "resource_status",
             "id": f"{agent}.score_api.resource_status",
-            "description": "Reports the live state of provisioned resources right now (RDS databases and EKS "
-                           "clusters): each Terraform resource's workload and whether it is ready, in progress, "
+            "description": "Reports the live state of provisioned resources right now (RDS databases, EKS "
+                           "clusters and network-access bastions): each Terraform resource's workload and whether it is ready, in progress, "
                            "failed or being deleted. Use it to follow up on provisioning or deletion, e.g. to check "
                            "whether a cluster is gone yet; task results only describe the moment a call ended.",
             "inputSchema": {"type": "object", "properties": {
-                "capability": {"type": "string", "enum": ["rds", "eks"],
-                               "description": "Only RDS databases or only EKS clusters. Leave out for both."},
+                "capability": {"type": "string", "enum": CAPABILITIES,
+                               "description": "Only RDS databases, EKS clusters or network-access bastions. "
+                                              "Leave out for all."},
                 "workload": {**WORKLOAD_SCHEMA, "description": "Only the resources of this Score workload."},
-                "terraform_cr": {"type": "string", "pattern": "^(rds|eks)-[a-z0-9-]+$",
+                "terraform_cr": {"type": "string", "pattern": "^(rds|eks|network-access)-[a-z0-9-]+$",
                                  "description": "One resource by its Terraform CR name, e.g. eks-<guid>. "
                                                 "An empty result means it no longer exists."},
             }, "required": [], "additionalProperties": False},

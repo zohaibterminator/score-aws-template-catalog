@@ -56,7 +56,11 @@ class ScoreApi:
 
     async def eks(self, workload: str, params: dict[str, Any]) -> dict[str, Any]:
         """/cgi-bin/eks takes the workload and the Score params flat in one object."""
-        return await self._post("eks", {"workload": workload, **params})
+        return await self.flat("eks", workload, params)
+
+    async def flat(self, endpoint: str, workload: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Endpoints other than /cgi-bin/score (eks, network-access) take the workload and params flat."""
+        return await self._post(endpoint, {"workload": workload, **params})
 
     async def status(self, filters: dict[str, Any]) -> dict[str, Any]:
         """Live state of the Terraform CRs; filters: capability, workload, terraform_cr (all optional)."""

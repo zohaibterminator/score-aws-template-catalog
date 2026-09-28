@@ -176,8 +176,10 @@ def _outcome(result: dict[str, Any]) -> str:
         return f"score-api failed at {result.get('stage', '?')}: {result.get('msg', '')}"
     if status == "dry_run":
         eks = str(result.get("would_delete_eks_workloads") or "").strip()
+        net = str(result.get("would_delete_network_access_workloads") or "").strip()
         return (f"Dry run: would delete workloads [{result.get('would_delete_workloads', '')}]"
-                + (f" and EKS clusters [{eks}]" if eks else "") + ". "
+                + (f" and EKS clusters [{eks}]" if eks else "")
+                + (f" and network-access bastions [{net}]" if net else "") + ". "
                 f'Send arguments {{"confirm": "{DELETE_CONFIRMATION}"}} to delete them.')
     if "wiped_workloads" in result:
         return _delete_all_outcome(result)
@@ -185,6 +187,10 @@ def _outcome(result: dict[str, Any]) -> str:
         line = (f"score-api published {result['terraform_cr']} in namespace {result.get('namespace')}; Flux and "
                 "tofu-controller now create or update the VPC, EKS cluster and node group (about 15-20 minutes). "
                 f"Outputs will be in Secret {result.get('output_secret')}.")
+    elif str(result.get("terraform_cr", "")).startswith("network-access-"):
+        line = (f"score-api published {result['terraform_cr']} in namespace {result.get('namespace')}; Flux and "
+                "tofu-controller now create or update the bastion (a few minutes). The Session Manager command "
+                f"will be in Secret {result.get('output_secret')} (key ssm_start_session_command).")
     elif "run_id" in result:
         line = (f"score-api pushed run {result['run_id']} (guid {result.get('guid')}); Flux and tofu-controller "
                 "now create or update the RDS instance.")
@@ -217,14 +223,18 @@ def _delete_all_outcome(result: dict[str, Any]) -> str:
     def names(key: str) -> str:
         return ", ".join(str(result.get(key) or "").split())
     parts = []
-    if names("wiped_workloads") or names("wiped_eks_workloads"):
-        parts.append(f"Wiped RDS workloads [{names('wiped_workloads')}] and EKS workloads [{names('wiped_eks_workloads')}].")
-    done = ", ".join(filter(None, (names("destroyed_by_terraform"), names("eks_destroyed_by_terraform"))))
+    if names("wiped_workloads") or names("wiped_eks_workloads") or names("wiped_network_access_workloads"):
+        parts.append(f"Wiped RDS workloads [{names('wiped_workloads')}], EKS workloads "
+                     f"[{names('wiped_eks_workloads')}] and network-access workloads "
+                     f"[{names('wiped_network_access_workloads')}].")
+    done = ", ".join(filter(None, (names("destroyed_by_terraform"), names("eks_destroyed_by_terraform"),
+                                   names("network_access_destroyed_by_terraform"))))
     parts.append(f"Destroyed by Terraform before this task finished: [{done}]." if done
                  else "Nothing had finished destroying when this task finished.")
-    if names("eks_destroy_in_progress"):
-        parts.append(f"Still being destroyed when this task finished (continues in the background, ~15 minutes): "
-                     f"[{names('eks_destroy_in_progress')}]. This result is not updated later; check the current "
+    running = ", ".join(filter(None, (names("eks_destroy_in_progress"), names("network_access_destroy_in_progress"))))
+    if running:
+        parts.append(f"Still being destroyed when this task finished (continues in the background, EKS ~15 minutes): "
+                     f"[{running}]. This result is not updated later; check the current "
                      "state with `kubectl get terraform -n default`.")
     if names("left_for_retry"):
         parts.append(f"Stuck and left for retry: [{names('left_for_retry')}].")
@@ -309,8 +319,8 @@ class CapabilityExecutor(AgentExecutor):
             filters = {k: arguments[k] for k in ("capability", "workload", "terraform_cr") if arguments.get(k)}
             unknown = sorted(set(arguments) - {"capability", "workload", "terraform_cr"})
             problems = [f"unknown argument {k!r}" for k in unknown]
-            if filters.get("capability") not in (None, "rds", "eks"):
-                problems.append("capability must be rds or eks")
+            if filters.get("capability") not in (None, *skills.CAPABILITIES):
+                problems.append(f"capability must be one of {skills.CAPABILITIES}")
             if problems:
                 return self._parts("rejected: " + "; ".join(problems), {"verdict": "rejected", "issues": problems})
             try:
@@ -323,7 +333,7 @@ class CapabilityExecutor(AgentExecutor):
             confirm = arguments.get("confirm")
             if confirm not in (None, DELETE_CONFIRMATION):
                 return self._parts(f'confirm must be "{DELETE_CONFIRMATION}", or left out for a dry run.')
-            summary = ("Deleting every RDS database and EKS cluster" if confirm
+            summary = ("Deleting every RDS database, EKS cluster and network-access bastion" if confirm
                        else "Checking what delete-all would remove")
             await self._run_task(context, event_queue, summary, self.score_api.delete_all(confirm))
             return None
@@ -339,10 +349,10 @@ class CapabilityExecutor(AgentExecutor):
             return self._parts(f"{plan['verdict']}, nothing was provisioned ({issues})", plan)
         summary = f"Submitting {tool} for workload {plan['workload']} with {plan['params']}"
         log.info(summary)
-        if plan["endpoint"] == "eks":
-            operation = self.score_api.eks(plan["workload"], plan["params"])
-        else:
+        if plan["endpoint"] == "score":
             operation = self.score_api.score(plan["workload"], plan["image"], plan["params"])
+        else:
+            operation = self.score_api.flat(plan["endpoint"], plan["workload"], plan["params"])
         await self._run_task(context, event_queue, summary, operation)
         return None
 

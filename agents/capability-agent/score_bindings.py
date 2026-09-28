@@ -10,15 +10,23 @@ import yaml
 PARAM_REF = re.compile(r"""\.Params\.(\w+)|index\s+\.Params\s+"(\w+)\"""")
 INIT_REF = re.compile(r"\.Init\.(\w+)")
 STATE_REF = re.compile(r"\.State\.(\w+)")
-# `| default <value>` in a template: a quoted string, a number, `list` or `(list "a" "b")`.
-DEFAULT = re.compile(r'\|\s*default\s+(?:"(?P<str>[^"]*)"|(?P<num>-?\d+(?:\.\d+)?)\b|\(list(?P<list>(?:\s+"[^"]*")*)\s*\)|(?P<empty>list)\b)')
+# `| default <value>` in a template: a quoted string, a number, a boolean, `list` or `(list "a" "b")`.
+DEFAULT = re.compile(r'\|\s*default\s+(?:"(?P<str>[^"]*)"|(?P<num>-?\d+(?:\.\d+)?)\b|(?P<bool>true|false)\b|\(list(?P<list>(?:\s+"[^"]*")*)\s*\)|(?P<empty>list)\b)')
+
+# `{{ if hasKey .Params "x" }}{{ .Params.x }}{{ else }}<value>{{ end }}`: how a template defaults a boolean to
+# true, since `| default true` would also replace an explicit false.
+HASKEY_DEFAULT = re.compile(r'hasKey\s+\.Params\s+"\w+".*\{\{-?\s*else\s*-?\}\}\s*(?P<value>true|false|-?\d+(?:\.\d+)?|"[^"]*")\s*\{\{-?\s*end')
 
 
 def _default(value: str) -> Any:
     """The default a template applies to a param, or None when it has none (the param is required)."""
+    if keyed := HASKEY_DEFAULT.search(value):
+        return _default(f'| default {keyed.group("value")}')
     match = DEFAULT.search(value)
     if not match:
         return None
+    if match.group("bool") is not None:
+        return match.group("bool") == "true"
     if match.group("str") is not None:
         return match.group("str")
     if match.group("num") is not None:
