@@ -96,7 +96,7 @@ When `SCORE_API_SECRET` is set, the manifest also lists what the agent can execu
 | `ANTHROPIC_API_KEY` or `ANTHROPIC_API_KEY_FILE` | required | Claude API key |
 | `ANTHROPIC_MODEL` | `claude-opus-5` | Any Claude model, e.g. `claude-sonnet-5` (manifest) or `claude-haiku-4-5-20251001` |
 | `A2A_AUTH_TOKEN` or `A2A_AUTH_TOKEN_FILE` | required | Bearer token for callers (`A2A_ALLOW_ANONYMOUS=true` for local testing only) |
-| `MODULE_REPO` / `MODULE_REF` | `score-tf-modules` on GitHub / default branch | Terraform repo to crawl (`terraform-aws/`, `eks/`). The manifest pins `MODULE_REF` to the same tag as the `score-provisioner-modules` Flux source. |
+| `MODULE_REPO` / `MODULE_REF` | `score-tf-modules` on GitHub / default branch | Terraform repo to crawl (`terraform-aws/`, `eks/`). The manifest sets `MODULE_REF=main`, so any new commit there is crawled automatically; Flux deploys from the tag on its `score-provisioner-modules` source, so a module change is advertised before it is deployed until that tag moves. |
 | `SCORE_REPO` / `SCORE_REF` | unset | Score provisioner repo. Without it, the Score mapping is not reported. |
 | `GIT_CHECK_SECONDS` | `60` | How often requests may check Git for a new commit |
 | `MANIFEST_PROVIDER` / `MANIFEST_AGENT` / `MANIFEST_PLANE` | `valueops` / `infra` / `resource` | Top-level `provider`, each tool's `agent`, and the top-level `plane` in the manifest |

@@ -68,7 +68,7 @@ spec:
         - name: MODULE_REPO
           value: https://github.com/zohaibterminator/score-tf-modules.git
         - name: MODULE_REF
-          value: v1.2.0          # same tag as the score-provisioner-modules Flux source (terraform-aws + eks)
+          value: main            # follow the branch: any new commit triggers a re-crawl (Flux still deploys from its tag)
         - name: SCORE_REPO
           value: https://github.com/zohaibterminator/score-gp-aws-rds.git
         - name: SCORE_REF
