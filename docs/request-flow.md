@@ -90,7 +90,7 @@ Terraform CRs from the one request:
    ├─ eks-<guid>             ./eks             VPC, subnets, EKS, node group, LBC/ExternalDNS IAM
    │     └─ writes tf-output-<guid>: vpc_id, subnet_id, public_subnet_id, cluster_security_group_id, ...
    │
-   └─ network-access-<guid>  ./network-access  bastion, cluster-admin access, LBC + NGINX + one NLB
+   └─ access-<guid>          ./network-access  bastion, cluster-admin access, LBC + NGINX + one NLB
          dependsOn: eks-<guid>          (plans only when the cluster stack is Ready)
          varsFrom:  tf-output-<guid>    (vpc_id, subnet_id, cluster_security_group_id, public_subnet_id in ssh mode)
          name:      <cluster_name>-access, vpc_cidr/region/account/ingress settings from the same request
@@ -103,7 +103,7 @@ Terraform CRs from the one request:
   `enable_network_access` (default true) are the only extra fields.
 - **One network-access stack per cluster.** `/eks` refuses to bundle when the cluster already has a separate stack
   (from `/network-access`), and `/network-access` refuses a cluster that already has a bundled one.
-- **Deletion order is kept.** delete-all first drops only the `network-access-<guid>` document from
+- **Deletion order is kept.** tofu-controller puts a dependency finalizer on `eks-<guid>`, so the cluster stack cannot be destroyed while `access-<guid>` exists. delete-all first drops only the `access-<guid>` document from
   `eks/generated/manifests.yaml` (Flux prunes it; the teardown removes NGINX and the NLB), waits until it is gone,
   then wipes `eks/`.
 - **The separate path still works.** The `network-access/` provisioner, module and `/network-access` endpoint are
@@ -205,9 +205,9 @@ The general stack behind `/rds`.
 1. The caller sends `provision_eks` with `{workload, cluster_name, aws_account_id, region, kubernetes_version}`
    (optionally `bastion_access_mode: "ssh"`).
 2. score-api writes `eks/workloads/<workload>.yaml` with `enable_network_access: true`, runs `score-k8s generate` and
-   pushes. `eks/generated/manifests.yaml` now holds `eks-<guid>` and `network-access-<guid>`.
-3. Flux `score-eks` applies both. `eks-<guid>` builds the cluster (about 15-20 minutes); `network-access-<guid>` waits.
-4. When the cluster stack is Ready, `network-access-<guid>` reads its IDs from `tf-output-<guid>` and builds the
+   pushes. `eks/generated/manifests.yaml` now holds `eks-<guid>` and `access-<guid>`.
+3. Flux `score-eks` applies both. `eks-<guid>` builds the cluster (about 15-20 minutes); `access-<guid>` waits.
+4. When the cluster stack is Ready, `access-<guid>` reads its IDs from `tf-output-<guid>` and builds the
    bastion, the load balancer controller, NGINX and the NLB (about 10 more minutes).
 5. Results: `tf-output-<guid>` (cluster) and `tf-output-<guid>-access` (bastion commands, NLB hostname).
 

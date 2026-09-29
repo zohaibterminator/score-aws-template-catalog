@@ -37,7 +37,7 @@ async def fake_score_api(request: httpx.Request) -> httpx.Response:
     return httpx.Response(200, json={"status": "ok", "guid": GUID, "terraform_cr": f"eks-{GUID}",
                                      "namespace": "default", "output_secret": f"tf-output-{GUID}",
                                      "network_access": bundled,
-                                     **({"network_access_cr": f"network-access-{GUID}",
+                                     **({"network_access_cr": f"access-{GUID}",
                                          "network_access_output_secret": f"tf-output-{GUID}-access"}
                                         if bundled else {})})
 
@@ -89,7 +89,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         task = rpc(client, {"skill": "call_tool", "tool": TOOL, "arguments": {**request, "bastion_access_mode": "SSH"}})["task"]
         assert task["status"]["state"] == "TASK_STATE_COMPLETED", task["status"]
         text = task["status"]["message"]["parts"][0]["text"]
-        assert f"network-access-{GUID}" in text and f"tf-output-{GUID}-access" in text, text
+        assert f"access-{GUID}" in text and f"tf-output-{GUID}-access" in text, text
         endpoint, body = calls[-1]
         assert endpoint == "eks" and body["bastion_access_mode"] == "ssh" and "enable_network_access" not in body, body
 
