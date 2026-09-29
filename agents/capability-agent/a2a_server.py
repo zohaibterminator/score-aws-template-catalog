@@ -183,6 +183,11 @@ def _outcome(result: dict[str, Any]) -> str:
         line = (f"score-api published {result['terraform_cr']} in namespace {result.get('namespace')}; Flux and "
                 "tofu-controller now create or update the VPC, EKS cluster and node group (about 15-20 minutes). "
                 f"Outputs will be in Secret {result.get('output_secret')}.")
+        if result.get("network_access_cr"):
+            line += (f" Network access comes with it: {result['network_access_cr']} starts once the cluster is ready "
+                     "and creates the bastion, the load balancer controller, NGINX and the NLB (about 10 more "
+                     f"minutes); its outputs (ssm_start_session_command, ssh_command, ingress_load_balancer_hostname) "
+                     f"will be in Secret {result.get('network_access_output_secret')}.")
     elif str(result.get("terraform_cr", "")).startswith("network-access-"):
         line = (f"score-api published {result['terraform_cr']} in namespace {result.get('namespace')}; Flux and "
                 "tofu-controller now create or update the bastion (a few minutes). The Session Manager command "

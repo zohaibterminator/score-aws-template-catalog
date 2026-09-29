@@ -40,6 +40,29 @@ def _parameter(variable: dict[str, Any], module: dict[str, Any], bindings: list[
     return parameter
 
 
+def _extra_parameters(bindings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Score params a provisioner reads that are not variables of its module (they drive a bundled CR)."""
+    types = {bool: "bool", int: "number", float: "number", list: "list(string)", str: "string"}
+    params: dict[str, dict[str, Any]] = {}
+    for binding in bindings:
+        for extra in binding.get("extra_params") or []:
+            entry = params.setdefault(extra["name"], {
+                "terraform_variable": extra["name"],
+                "type": types.get(type(extra["default"]), "string"),
+                "required": extra["default"] is None,
+                "terraform_default": extra["default"],
+                "sensitive": False,
+                "description": None,
+                "validations": [],
+                "drives": [],
+                "provisioner_only": True,
+                "score_sources": [],
+            })
+            entry["score_sources"].append({"provisioner": binding["uri"], "set_by": "developer",
+                                           "score_param": extra["name"], "default": extra["default"]})
+    return list(params.values())
+
+
 def _score_example(binding: dict[str, Any]) -> dict[str, Any]:
     params = {
         var["score_param"]: var.get("default") or f"<{var['score_param']}>"
@@ -76,7 +99,8 @@ def _capability(module: dict[str, Any], bindings: list[dict[str, Any]] | None) -
             "data_sources": [r["address"] for r in module["resources"] if r["kind"] == "data"],
             "child_modules": module["child_modules"],
         },
-        "parameters": [_parameter(v, module, matched if bindings is not None else None) for v in module["variables"]],
+        "parameters": [_parameter(v, module, matched if bindings is not None else None) for v in module["variables"]]
+                      + _extra_parameters(matched),
         "fixed_settings": [
             {"resource": r["address"], "attribute": a["attribute"], "value": a["value"]}
             for r in managed for a in r["attributes"] if a["kind"] == "fixed"

@@ -65,7 +65,7 @@ When `SCORE_API_SECRET` is set, the manifest also lists what the agent can execu
 | Tool id | score-api endpoint | Arguments | Reply |
 | --- | --- | --- | --- |
 | `infra.aws_terraform.provision_postgres` | `/cgi-bin/score` | `workload`, `image` (required), plus any params from the `inputSchema` | Task. Artifact `score-api-response` has `run_id` and `guid`. |
-| `infra.aws_terraform.provision_eks` | `/cgi-bin/eks` | `workload`, `cluster_name`, `aws_account_id`, `region`, `kubernetes_version` (a string, e.g. `"1.34"`) (required), plus the optional network, node, environment and plane params | Task. Artifact has `terraform_cr` (`eks-<guid>`), `namespace` and `output_secret`. The cluster takes about 15-20 minutes to become ready. It includes one cluster-wide NGINX ingress behind a shared NLB, and no bastion. |
+| `infra.aws_terraform.provision_eks` | `/cgi-bin/eks` | `workload`, `cluster_name`, `aws_account_id`, `region`, `kubernetes_version` (a string, e.g. `"1.34"`) (required), plus `environment`, `bastion_access_mode` (`ssm`/`ssh`) and `enable_network_access` (default true) | Task. Artifact has `terraform_cr` (`eks-<guid>`), `namespace` and `output_secret`, and with network access `network_access_cr` (`network-access-<guid>`) and `network_access_output_secret` (`tf-output-<guid>-access`). The cluster takes about 15-20 minutes; the bundled bastion, load balancer controller, NGINX and NLB follow in about 10 more, with no second request. |
 | `infra.aws_terraform.provision_network_access` | `/cgi-bin/network-access` | `workload`, `name`, `aws_account_id`, `region`, `vpc_id`, `subnet_id`, `vpc_cidr` and `cluster_name` (required, from the cluster's `tf-output-<eks-guid>`), plus `bastion_access_mode` (`ssm` default, or `ssh` with `ssh_key_name` and `public_subnet_id`), `cluster_security_group_id`, `enable_ssm_vpc_endpoints` and the other optional params | Task. Artifact has `terraform_cr` (`network-access-<guid>`) and `output_secret`, whose `ssm_start_session_command` opens a shell on the bastion. |
 | `infra.score_api.resource_status` | `/cgi-bin/status` | optional `capability` (`rds`/`eks`/`network-access`), `workload`, `terraform_cr` | Message (read-only, no task): the live state of each matching Terraform resource (`ready`, `in_progress`, `failed`, `deleting`). An empty result for a `terraform_cr` means it is gone. Task results only describe the moment a call ended; use this to follow up. |
 | `infra.score_api.update_aws_credentials` | `/cgi-bin/update-aws-creds` | `access_key_id`, `secret_access_key`, `region` | Message (not a task, so the credentials are never kept in the task store) |
@@ -126,8 +126,8 @@ Wait for `Agent found N capabilities at <commit>` in the log. One-shot crawl wit
 
 1. **Build and push the image** from this directory (PowerShell or any shell):
    ```sh
-   podman build -t docker.io/abdurrahman126/score-capability-agent:0.3.12 .
-   podman push docker.io/abdurrahman126/score-capability-agent:0.3.12
+   podman build -t docker.io/abdurrahman126/score-capability-agent:0.3.13 .
+   podman push docker.io/abdurrahman126/score-capability-agent:0.3.13
    ```
 2. **Set up Vault** as described at the top of [`k8s/vault-policy.hcl`](k8s/vault-policy.hcl): a policy, a `capability-agent-role` bound to the `score-capability-agent` service account, and `secret/capability-agent/config` with `a2a_token`, `anthropic_api_key` and `git_token` (a read-only GitHub token for both repos). The policy also reads score-api's `secret/score-api/app-secret`, so the agent can call score-api.
 3. **Apply the single manifest** [`k8s/capability-agent.yaml`](k8s/capability-agent.yaml) (ServiceAccount, Deployment, Service, TLS Issuer/Certificate, Ingress). In Rancher: cluster → Import YAML → namespace `default`. Or:
@@ -145,6 +145,7 @@ The pod has no RBAC and no cloud credentials. It runs as non-root with a read-on
 - `scripts/test-capability-a2a.py` covers crawl on request, caching per commit, failed crawls not being cached, auth, and the skills.
 - `scripts/test-capability-actions.py` covers `call_tool` against a fake score-api: validation before the call, provision and delete-all tasks, `returnImmediately` with `GetTask`, and credential handling.
 - `scripts/test-capability-eks.py` covers EKS: a Score project in a sub-folder, list and number defaults, the `provision_eks` tool, execution through `/cgi-bin/eks`, validation before score-api, and reusing the crawl when score-api only committed request state.
+- `scripts/test-capability-eks-bundle.py` runs the real `eks` module and provisioner: the bundled network-access CR adds only `enable_network_access` and `bastion_access_mode`, does not leak its variables into the eks capability, and `provision_eks` executes through `/cgi-bin/eks`.
 - `scripts/test-capability-probe.py` checks that plain curls to the URL (no token, no skill, free text, the public agent card, health endpoints) never return capabilities or start a crawl, and that list_capabilities drops a removed variable at once when the last crawl is older than the commit.
 - `scripts/test-capability-network-access.py` runs the real `network-access` module and provisioner (sibling checkouts of score-tf-modules and score-gp-aws-rds; skipped when absent) through the manifest, validation and `/cgi-bin/network-access` execution.
 

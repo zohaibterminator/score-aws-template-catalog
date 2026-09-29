@@ -84,9 +84,15 @@ SCORE_TYPES: dict[str, dict[str, Any]] = {
     # EKS: the module's own variable validations cover region, CIDRs and node sizes.
     # "inputs": the only params a user supplies; every other provisioner param keeps its platform default and is
     # neither advertised nor accepted. "require": inputs that are required although the module gives them a default.
+    # enable_network_access (score-api default true) also creates the bastion, load balancer controller, NGINX and
+    # NLB in the same request, fed from the cluster's outputs; bastion_access_mode picks ssm or ssh for that bastion.
     "eks": {"endpoint": "eks", "fields": ["workload"],
-            "allowed": {"environment": ENVIRONMENTS, "plane": PLANES},
-            "inputs": ["cluster_name", "aws_account_id", "region", "kubernetes_version", "environment"]},
+            "allowed": {"environment": ENVIRONMENTS, "plane": PLANES, "bastion_access_mode": ["ssm", "ssh"]},
+            "inputs": ["cluster_name", "aws_account_id", "region", "kubernetes_version", "environment",
+                       "enable_network_access", "bastion_access_mode"],
+            # What score-api applies when the input is left out (the provisioner's own default differs so that
+            # clusters requested before bundling keep their shape when re-rendered).
+            "defaults": {"enable_network_access": True}},
     # SSM bastion into an EKS VPC, requested separately from the cluster; the module validates the rest.
     # public_subnet_id is needed only with bastion_access_mode "ssh"; ssh_key_name defaults to "platform-bastion".
     "network-access": {"endpoint": "network-access", "fields": ["workload"],
@@ -211,6 +217,9 @@ def tool_manifest(report: dict[str, Any], platform: str = "valueops", agent: str
                 for field, pattern in INPUT_PATTERNS.get(entry["score_type"], {}).items():
                     if field in properties:
                         properties[field] = {**properties[field], "pattern": pattern}
+                for field, value in spec.get("defaults", {}).items():
+                    if field in properties:
+                        properties[field] = {**properties[field], "default": value}
             for field, allowed in spec["allowed"].items():
                 if field in properties:
                     properties[field] = {**properties[field], "enum": allowed}

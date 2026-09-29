@@ -93,10 +93,30 @@ def _output_source(value: str, init: dict[str, str], state: dict[str, str]) -> d
     return {"source": "score", **traced}
 
 
+# Params the platform sets (score-api), never a caller: not advertised even when a template reads them.
+PLATFORM_PARAMS = {"runner_vault_role"}
+
+
+def _primary(manifests: str) -> str:
+    """The first Terraform document of a manifests template: the CR whose module the provisioner is bound to.
+
+    A provisioner may render more than one CR (the eks provisioner bundles a network-access CR after its own); the
+    later ones must not lend their path, vars or varsFrom to the primary module."""
+    docs, current = [], []
+    for line in manifests.splitlines():
+        if re.match(r"^\s*-\s*apiVersion:", line) and current:
+            docs.append("\n".join(current))
+            current = []
+        current.append(line)
+    docs.append("\n".join(current))
+    return next((doc for doc in docs if "kind: Terraform" in doc), manifests)
+
+
 def _provisioner(item: dict[str, Any], file: str) -> dict[str, Any] | None:
     manifests = item.get("manifests") or ""
     if "kind: Terraform" not in manifests:
         return None
+    manifests = _primary(manifests)
     init, state = _keyed_lines(item.get("init")), _keyed_lines(item.get("state"))
 
     tf_vars = []
@@ -107,6 +127,17 @@ def _provisioner(item: dict[str, Any], file: str) -> dict[str, Any] | None:
     for key in re.findall(r"^\s*-\s*(\w+)\s*$", _block(varsfrom, "varsKeys"), re.M):
         tf_vars.append({"terraform_variable": key, "set_by": "secret",
                         "detail": f"Kubernetes Secret {secret.group(1) if secret else '?'}"})
+
+    # Params the template reads that no variable of the primary module takes, e.g. the eks provisioner's
+    # enable_network_access and bastion_access_mode, which drive its bundled network-access CR.
+    traced = {v.get("score_param") for v in tf_vars if v.get("set_by") == "developer"}
+    extra_params: list[dict[str, Any]] = []
+    for value in init.values():
+        for match in PARAM_REF.finditer(value):
+            name = match.group(1) or match.group(2)
+            if name in traced or name in PLATFORM_PARAMS or any(p["name"] == name for p in extra_params):
+                continue
+            extra_params.append({"name": name, "default": _default(value)})
 
     source = re.search(r"sourceRef:\s*\n(?:\s*\w+:.*\n)*?\s*name:\s*(\S+)", manifests)
     path = re.search(r"^\s*path:\s*(\S+)\s*$", manifests, re.M)
@@ -122,6 +153,7 @@ def _provisioner(item: dict[str, Any], file: str) -> dict[str, Any] | None:
         "approve_plan": approve.group(1).strip() if approve else None,
         "destroy_on_deletion": "destroyResourcesOnDeletion: true" in manifests,
         "supported_params": item.get("supported_params"),
+        "extra_params": extra_params,
         "vars": tf_vars,
         "outputs": [{"name": key, **_output_source(value, init, state)}
                     for key, value in _keyed_lines(item.get("outputs")).items()],

@@ -71,13 +71,44 @@ Each endpoint:
 | Endpoint | Folder | Creates |
 |---|---|---|
 | `/rds` | `rds/` | `terraform-aws` stack (RDS etc.) |
-| `/eks` | `eks/` | EKS cluster stack |
+| `/eks` | `eks/` | EKS cluster stack, **plus the network-access stack in the same request** (default; `enable_network_access: false` for the cluster only) |
 | `/network-access` | `network-access/` | bastion + cluster add-ons (LBC, NGINX, optional ExternalDNS) |
-| `/delete-all` (v14) | all | removes the workloads in dependency order: **network-access first, then EKS**, then the rest |
+| `/delete-all` (v15) | all | removes the workloads in dependency order: **network-access first, then EKS**, then the rest |
 
 `scripts/deploy-platform.sh` (`lists | eks | access | status | delete`) is a wrapper that calls these endpoints for the platform stacks. It keeps its own copy of the allow-lists, used only for the office-egress drift check and the NLB rule-budget check.
 
 ---
+
+## 2a. One request for EKS and network access (bundled)
+
+`provision_eks` / `/eks` creates the cluster **and** its network access by default. The EKS provisioner renders two
+Terraform CRs from the one request:
+
+```
+/eks {cluster_name, aws_account_id, region, kubernetes_version, [bastion_access_mode]}
+   │
+   ├─ eks-<guid>             ./eks             VPC, subnets, EKS, node group, LBC/ExternalDNS IAM
+   │     └─ writes tf-output-<guid>: vpc_id, subnet_id, public_subnet_id, cluster_security_group_id, ...
+   │
+   └─ network-access-<guid>  ./network-access  bastion, cluster-admin access, LBC + NGINX + one NLB
+         dependsOn: eks-<guid>          (plans only when the cluster stack is Ready)
+         varsFrom:  tf-output-<guid>    (vpc_id, subnet_id, cluster_security_group_id, public_subnet_id in ssh mode)
+         name:      <cluster_name>-access, vpc_cidr/region/account/ingress settings from the same request
+         writes tf-output-<guid>-access: ssm_start_session_command, ssh_command, ingress_load_balancer_hostname, ...
+```
+
+- **Nothing is copied by hand.** The IDs AWS generates for the VPC, subnets and security group flow from the cluster
+  stack's output Secret into the network-access stack.
+- **Inputs:** `bastion_access_mode` (`ssm` default, or `ssh` with key pair `platform-bastion`) and
+  `enable_network_access` (default true) are the only extra fields.
+- **One network-access stack per cluster.** `/eks` refuses to bundle when the cluster already has a separate stack
+  (from `/network-access`), and `/network-access` refuses a cluster that already has a bundled one.
+- **Deletion order is kept.** delete-all first drops only the `network-access-<guid>` document from
+  `eks/generated/manifests.yaml` (Flux prunes it; the teardown removes NGINX and the NLB), waits until it is gone,
+  then wipes `eks/`.
+- **The separate path still works.** The `network-access/` provisioner, module and `/network-access` endpoint are
+  unchanged, as a backup or for clusters requested with `enable_network_access: false`. Clusters requested before
+  bundling keep their shape: the provisioner's own default is false, and score-api sends true only for new requests.
 
 ## 3. Provisioners (score-gp-aws-rds)
 
@@ -169,7 +200,18 @@ The general stack behind `/rds`.
 
 ---
 
-## End-to-end example: "create an EKS cluster"
+## End-to-end example: "create an EKS cluster with access" (bundled)
+
+1. The caller sends `provision_eks` with `{workload, cluster_name, aws_account_id, region, kubernetes_version}`
+   (optionally `bastion_access_mode: "ssh"`).
+2. score-api writes `eks/workloads/<workload>.yaml` with `enable_network_access: true`, runs `score-k8s generate` and
+   pushes. `eks/generated/manifests.yaml` now holds `eks-<guid>` and `network-access-<guid>`.
+3. Flux `score-eks` applies both. `eks-<guid>` builds the cluster (about 15-20 minutes); `network-access-<guid>` waits.
+4. When the cluster stack is Ready, `network-access-<guid>` reads its IDs from `tf-output-<guid>` and builds the
+   bastion, the load balancer controller, NGINX and the NLB (about 10 more minutes).
+5. Results: `tf-output-<guid>` (cluster) and `tf-output-<guid>-access` (bastion commands, NLB hostname).
+
+## End-to-end example: "create an EKS cluster" (separate requests)
 
 1. The caller sends an A2A tool call to the agent with `{cluster_name, aws_account_id, region, kubernetes_version}`. No LLM runs.
 2. The agent checks the params against `facts()` and POSTs them to score-api `/eks`.
