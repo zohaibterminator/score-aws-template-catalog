@@ -10,7 +10,9 @@ from __future__ import annotations
 from collections import deque
 import copy
 from dataclasses import dataclass, field
+import json
 import logging
+import os
 from pathlib import Path
 import re
 import shutil
@@ -51,7 +53,8 @@ class Snapshot:
 
 class CapabilityStore:
     def __init__(self, module_repo: str, module_ref: str | None, score_repo: str | None, score_ref: str | None,
-                 workdir: Path, describe: Describer, check_interval: float = 60, max_crawls_per_hour: int = 6):
+                 workdir: Path, describe: Describer, check_interval: float = 60, max_crawls_per_hour: int = 6,
+                 cache_dir: Path | None = None):
         self.module_repo, self.module_ref = module_repo, module_ref
         self.score_repo, self.score_ref = score_repo, score_ref
         self.workdir, self.describe, self.check_interval = workdir, describe, check_interval
@@ -69,6 +72,38 @@ class CapabilityStore:
         self._failures = 0
         self._retry_at = 0.0
         self._last_error = ""
+        # The last LLM crawl, saved to a persistent volume so a pod restart does not pay for a new crawl of the same
+        # commits. It is served only when its commits still match the refs.
+        self._cache_file = Path(cache_dir) / "crawl.json" if cache_dir else None
+        self._snapshot = self._load_saved()
+
+    def _load_saved(self) -> Snapshot | None:
+        if not self._cache_file or not self._cache_file.exists():
+            return None
+        try:
+            saved = json.loads(self._cache_file.read_text(encoding="utf-8"))
+            if saved.get("repos") != [self.module_repo, self.module_ref, self.score_repo, self.score_ref]:
+                log.info("Saved crawl is for other repositories or refs; ignoring it")
+                return None
+            commits = tuple(saved["commits"])
+            log.info("Loaded the saved crawl for commits %s (no LLM)", commits)
+            return Snapshot(saved["report"], {}, (commits[0], commits[1]))
+        except Exception as exc:
+            log.warning("Could not read the saved crawl %s: %s", self._cache_file, exc)
+            return None
+
+    def _save(self, snapshot: Snapshot) -> None:
+        if not self._cache_file:
+            return
+        try:
+            self._cache_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._cache_file.with_suffix(".tmp")
+            tmp.write_text(json.dumps({
+                "repos": [self.module_repo, self.module_ref, self.score_repo, self.score_ref],
+                "commits": list(snapshot.commits), "report": snapshot.report}), encoding="utf-8")
+            os.replace(tmp, self._cache_file)
+        except Exception as exc:  # the crawl itself succeeded; only the restart cache is missing
+            log.warning("Could not save the crawl to %s: %s", self._cache_file, exc)
 
     def retry_in(self) -> float:
         """Seconds until the next crawl may be attempted (0 when one may run now)."""
@@ -113,6 +148,7 @@ class CapabilityStore:
             if not self._snapshot or self._snapshot.commits != wanted:
                 try:
                     self._snapshot = self._build(use_llm=True)
+                    self._save(self._snapshot)
                 except Exception as exc:
                     self._failures += 1
                     delay = min(60 * 2 ** (self._failures - 1), 1800)

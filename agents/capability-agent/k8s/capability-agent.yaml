@@ -29,6 +29,9 @@ metadata:
     app: score-capability-agent
 spec:
   replicas: 1
+  # The crawl cache is a ReadWriteOnce volume: stop the old pod before the new one mounts it.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: score-capability-agent
@@ -59,7 +62,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: agent
-        image: docker.io/abdurrahman126/score-capability-agent:0.3.6
+        image: docker.io/abdurrahman126/score-capability-agent:0.3.7
         imagePullPolicy: Always       # re-pull when an image tag is rebuilt; switch to IfNotPresent once tags are immutable
         ports:
         - name: http
@@ -85,6 +88,8 @@ spec:
           value: http://litellm.apps.ai.cdis.systemsltd.local
         - name: ANTHROPIC_PROMPT_CACHING   # off for the LiteLLM gateway; try "true" once crawls work
           value: "false"
+        - name: CRAWL_CACHE_DIR        # last Claude crawl, kept across restarts; reused while the commits match
+          value: /cache
         - name: MANIFEST_PLANE         # top-level "plane" in the tool manifest
           value: resource
         - name: A2A_AUTH_TOKEN_FILE
@@ -130,10 +135,27 @@ spec:
         volumeMounts:
         - name: tmp
           mountPath: /tmp
+        - name: crawl-cache
+          mountPath: /cache
       volumes:
       - name: tmp
         emptyDir:
           sizeLimit: 512Mi
+      - name: crawl-cache
+        persistentVolumeClaim:
+          claimName: score-capability-agent-cache
+---
+# Holds the last Claude crawl (a few hundred KB of JSON), so a restart does not pay for a new crawl of unchanged commits.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: score-capability-agent-cache
+  namespace: default
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 64Mi
 ---
 apiVersion: v1
 kind: Service

@@ -474,6 +474,7 @@ def main() -> None:
         describe=lambda report, roots: describe_with_llm(report, roots, model),
         check_interval=float(os.environ.get("GIT_CHECK_SECONDS", "60")),
         max_crawls_per_hour=int(os.environ.get("MAX_CRAWLS_PER_HOUR", "6")),
+        cache_dir=Path(os.environ["CRAWL_CACHE_DIR"]) if os.environ.get("CRAWL_CACHE_DIR") else None,
     )
     score_api = None
     if score_api_secret := secret("SCORE_API_SECRET"):

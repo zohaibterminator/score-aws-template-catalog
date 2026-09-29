@@ -185,5 +185,25 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 
     assert skills.check_request(store.snapshot.report, {"capability_id": "terraform-aws"})["verdict"] == "rejected"
 
+    # A pod restart reuses the saved crawl of unchanged commits instead of paying for a new one.
+    cache = tmp / "cache"
+    first = CapabilityStore(str(module_repo), None, str(score_repo), None, tmp / "work-a",
+                            describe=fake_llm_crawl, check_interval=0, cache_dir=cache)
+    before = len(crawls)
+    first.current()
+    assert len(crawls) == before + 1 and (cache / "crawl.json").exists()
+    restarted = CapabilityStore(str(module_repo), None, str(score_repo), None, tmp / "work-b",
+                                describe=fake_llm_crawl, check_interval=0, cache_dir=cache)
+    assert restarted.snapshot is not None, "the saved crawl must load at start-up"
+    restarted.current()
+    assert len(crawls) == before + 1, "a restart with unchanged commits must not crawl again"
+    commit(module_repo, {"terraform-aws/main.tf": MAIN_TF + 'variable "after_restart" { default = "x" }' + chr(10)}, "v4")
+    restarted.max_crawls_per_hour = 100
+    restarted.current()
+    assert len(crawls) == before + 2, "a new commit after a restart crawls once"
+    other = CapabilityStore(str(module_repo), "does-not-matter", str(score_repo), None, tmp / "work-c",
+                            describe=fake_llm_crawl, check_interval=0, cache_dir=cache)
+    assert other.snapshot is None, "a crawl saved for other refs is never served"
+
 print("Capability A2A checks passed: LLM crawl only for list_capabilities, cache per commit, failed crawls not "
       "cached, agent card, bearer auth, list/check skills.")

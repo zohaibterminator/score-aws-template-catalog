@@ -31,7 +31,7 @@ Other agent ◀──A2A── capability list (text + JSON), with the Git commi
 
 ### Claude
 
-**Claude is used for exactly one thing: describing the capabilities when a `list_capabilities` request arrives and the repositories have a new commit.** Nothing else calls it: every score-api call (provisioning, network-access, delete-all, credentials, status), `check_request`, start-up and free text are handled by code from deterministic Terraform and Score facts read from Git. Free-text questions are not answered. The agent runs on Claude through the official `anthropic` Python SDK's Tool Runner (`client.beta.messages.tool_runner`), which handles the tool-call loop. The code defaults to `claude-opus-5`; the Kubernetes manifest sets `ANTHROPIC_MODEL=claude-sonnet-5`, which is cheaper and handles this crawl well. Opus 5 and Fable requests opt into server-side refusal fallbacks; other models are called without them. A crawl is capped at 40 tool rounds and a question at 15.
+**Claude is used for exactly one thing: describing the capabilities when a `list_capabilities` request arrives and the repositories have a new commit.** Nothing else calls it: every score-api call (provisioning, network-access, delete-all, credentials, status), `check_request`, start-up and free text are handled by code from deterministic Terraform and Score facts read from Git. Free-text questions are not answered. The last crawl is saved to a persistent volume (`CRAWL_CACHE_DIR`), so a pod restart reuses it instead of crawling again while the commits are unchanged. The agent runs on Claude through the official `anthropic` Python SDK's Tool Runner (`client.beta.messages.tool_runner`), which handles the tool-call loop. The code defaults to `claude-opus-5`; the Kubernetes manifest sets `ANTHROPIC_MODEL=claude-sonnet-5`, which is cheaper and handles this crawl well. Opus 5 and Fable requests opt into server-side refusal fallbacks; other models are called without them. A crawl is capped at 40 tool rounds and a question at 15.
 
 Requests enable server-side refusal fallbacks (`fallbacks: "default"`, beta `server-side-fallback-2026-07-01`). If a safety classifier declines, the API re-runs the request on a fallback model instead of stopping. If the whole chain still declines, or a response is cut off at `max_tokens`, the crawl fails and nothing is cached.
 
@@ -126,8 +126,8 @@ Wait for `Agent found N capabilities at <commit>` in the log. One-shot crawl wit
 
 1. **Build and push the image** from this directory (PowerShell or any shell):
    ```sh
-   podman build -t docker.io/abdurrahman126/score-capability-agent:0.3.6 .
-   podman push docker.io/abdurrahman126/score-capability-agent:0.3.6
+   podman build -t docker.io/abdurrahman126/score-capability-agent:0.3.7 .
+   podman push docker.io/abdurrahman126/score-capability-agent:0.3.7
    ```
 2. **Set up Vault** as described at the top of [`k8s/vault-policy.hcl`](k8s/vault-policy.hcl): a policy, a `capability-agent-role` bound to the `score-capability-agent` service account, and `secret/capability-agent/config` with `a2a_token`, `anthropic_api_key` and `git_token` (a read-only GitHub token for both repos). The policy also reads score-api's `secret/score-api/app-secret`, so the agent can call score-api.
 3. **Apply the single manifest** [`k8s/capability-agent.yaml`](k8s/capability-agent.yaml) (ServiceAccount, Deployment, Service, TLS Issuer/Certificate, Ingress). In Rancher: cluster → Import YAML → namespace `default`. Or:
