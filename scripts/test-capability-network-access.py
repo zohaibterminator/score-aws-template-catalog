@@ -56,7 +56,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     store = CapabilityStore(str(tmp / "modules"), None, str(tmp / "score"), None, tmp / "work",
                             describe=lambda facts, roots: facts, check_interval=0)
     score_api = ScoreApi("http://score-api", APP_SECRET, transport=httpx.MockTransport(fake_score_api))
-    app = build_app(store, public_url="http://agent/", auth_token=TOKEN, answer=None, warm_up=False,
+    app = build_app(store, public_url="http://agent/", auth_token=TOKEN, warm_up=False,
                     score_api=score_api)
 
     with TestClient(app) as client:

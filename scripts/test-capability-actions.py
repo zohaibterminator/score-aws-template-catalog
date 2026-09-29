@@ -98,7 +98,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     module_repo, score_repo = make_fixture(tmp)
     store = CapabilityStore(str(module_repo), None, str(score_repo), None, tmp / "work", describe=fake_crawl)
     score_api = ScoreApi("http://score-api", APP_SECRET, transport=httpx.MockTransport(fake_score_api))
-    app = build_app(store, public_url="http://agent/", auth_token=TOKEN, answer=None, warm_up=False,
+    app = build_app(store, public_url="http://agent/", auth_token=TOKEN, warm_up=False,
                     score_api=score_api)
 
     with TestClient(app) as client:
@@ -217,7 +217,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         assert calls[-1] == ("delete-all", {"confirm": "DELETE-ALL"})
 
     # Without score-api the agent still lists capabilities, but refuses to execute.
-    app = build_app(store, public_url="http://agent/", auth_token=TOKEN, answer=None, warm_up=False)
+    app = build_app(store, public_url="http://agent/", auth_token=TOKEN, warm_up=False)
     with TestClient(app) as client:
         text, _ = message(call(client, PROVISION, {"workload": "checkout-api", "image": "nginx"}))
         assert "not connected to score-api" in text

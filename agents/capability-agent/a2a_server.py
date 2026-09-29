@@ -40,8 +40,7 @@ from store import CapabilityStore, Snapshot
 
 log = logging.getLogger("capability-agent")
 OPEN_PATHS = {AGENT_CARD_WELL_KNOWN_PATH, "/healthz", "/readyz"}
-USAGE = ('Ask in plain text (e.g. "What capabilities do you have?"), or send a data part '
-         '{"skill": "list_capabilities"}, {"skill": "check_request", "request": '
+USAGE = ('Send a data part: {"skill": "list_capabilities"}, {"skill": "check_request", "request": '
          '{"score_type": ..., "params": {...}, "expect": {...}}} or '
          '{"skill": "call_tool", "tool": "<tool id from the manifest>", "arguments": {...}}.')
 Answerer = Callable[[Snapshot, str], "tuple[str, list[dict[str, Any]]]"]
@@ -103,7 +102,7 @@ def masked(arguments: dict[str, Any]) -> dict[str, Any]:
 def structured_requests(message) -> list[dict[str, Any]]:
     """Skill requests in a message. Callers should send a data part, but a data part holding a JSON string, or a
     text part that is entirely a JSON object with "skill", is accepted too, so it is executed instead of being
-    treated as a question."""
+    ignored as free text."""
     requests = [r for r in map(_as_request, get_data_parts(message.parts)) if r]
     if not requests and (request := _as_request(get_message_text(message).strip())):
         requests = [request]
@@ -244,9 +243,9 @@ def _delete_all_outcome(result: dict[str, Any]) -> str:
 
 
 class CapabilityExecutor(AgentExecutor):
-    def __init__(self, store: CapabilityStore, answer: Answerer, manifest_provider: str, manifest_agent: str,
+    def __init__(self, store: CapabilityStore, manifest_provider: str, manifest_agent: str,
                  score_api: ScoreApi | None = None, manifest_plane: str = "resource"):
-        self.store, self.answer, self.score_api = store, answer, score_api
+        self.store, self.score_api = store, score_api
         self.manifest_provider, self.manifest_agent = manifest_provider, manifest_agent
         self.manifest_plane = manifest_plane
 
@@ -255,37 +254,34 @@ class CapabilityExecutor(AgentExecutor):
         return [new_text_part(text)] + ([new_data_part(data)] if data is not None else [])
 
     async def handle(self, context: RequestContext) -> list:
-        message = context.message
-        requests = structured_requests(message)
-        text = "" if requests else get_message_text(message).strip()
-        if not requests and not text:
-            return self._parts(USAGE)
+        # Claude is used for exactly one thing: describing the capabilities for list_capabilities. Everything else
+        # (check_request, free text, unknown skills) is answered by code, without the LLM.
+        requests = structured_requests(context.message)
+        if not requests:
+            return self._parts("Free-text questions are not answered. " + USAGE)
+        request = requests[0]
+        skill = request.get("skill")
+        if skill not in ("list_capabilities", "check_request"):
+            return self._parts(f"Unknown skill {skill!r}. {USAGE}")
         try:
-            snapshot = await asyncio.to_thread(self.store.current)
+            snapshot = await asyncio.to_thread(self.store.current if skill == "list_capabilities" else self.store.facts)
         except Exception as exc:
-            log.exception("Crawl failed")
-            return self._parts(f"Could not crawl the repositories: {type(exc).__name__}: {exc}")
+            log.exception("Reading the repositories failed")
+            return self._parts(f"Could not read the repositories: {type(exc).__name__}: {exc}")
         source = snapshot.report["sources"]["terraform_modules"]
 
-        if requests:
-            request = requests[0]
-            skill = request.get("skill")
-            if skill == "list_capabilities":
-                manifest = skills.tool_manifest(snapshot.report, self.manifest_provider, self.manifest_agent,
-                                                actions=self.score_api is not None, plane=self.manifest_plane)
-                detail = request.get("detail", "manifest")
-                result = manifest if detail == "manifest" else skills.list_capabilities(snapshot.report, detail)
-                lines = "\n".join(f"- {tool['id']}: {tool['description']}" for tool in manifest["tools"])
-                header = f"Capabilities in {source['repository']}@{source['commit'][:12]}:"
-                return self._parts(f"{header}\n{lines}", result)
-            if skill == "check_request":
-                result = skills.check_request(snapshot.report, request.get("request") or {})
-                issues = "; ".join(f"{i['field']}: {i['problem']}" for i in result["issues"])
-                return self._parts(result["verdict"] + (f" ({issues})" if issues else ""), result)
-            return self._parts(f"Unknown skill {skill!r}. {USAGE}")
-
-        answer, evidence = await asyncio.to_thread(self.answer, snapshot, text)
-        return self._parts(answer, {"evidence": evidence, "sources": snapshot.report["sources"]})
+        if skill == "list_capabilities":
+            manifest = skills.tool_manifest(snapshot.report, self.manifest_provider, self.manifest_agent,
+                                            actions=self.score_api is not None, plane=self.manifest_plane)
+            detail = request.get("detail", "manifest")
+            result = manifest if detail == "manifest" else skills.list_capabilities(snapshot.report, detail)
+            lines = "\n".join(f"- {tool['id']}: {tool['description']}" for tool in manifest["tools"])
+            header = f"Capabilities in {source['repository']}@{source['commit'][:12]}:"
+            return self._parts(f"{header}\n{lines}", result)
+        if skill == "check_request":
+            result = skills.check_request(snapshot.report, request.get("request") or {})
+            issues = "; ".join(f"{i['field']}: {i['problem']}" for i in result["issues"])
+            return self._parts(result["verdict"] + (f" ({issues})" if issues else ""), result)
 
     async def call_tool(self, context: RequestContext, event_queue: EventQueue, request: dict[str, Any]) -> list | None:
         """Run a manifest tool through score-api. Returns reply parts, or None when it ran as a task."""
@@ -338,11 +334,12 @@ class CapabilityExecutor(AgentExecutor):
             await self._run_task(context, event_queue, summary, self.score_api.delete_all(confirm))
             return None
 
+        # Provisioning is validated and sent by code from the deterministic facts; it never triggers the LLM.
         try:
-            snapshot = await asyncio.to_thread(self.store.current)
+            snapshot = await asyncio.to_thread(self.store.facts)
         except Exception as exc:
-            log.exception("Crawl failed")
-            return self._parts(f"Could not crawl the repositories: {type(exc).__name__}: {exc}")
+            log.exception("Reading the repositories failed")
+            return self._parts(f"Could not read the repositories: {type(exc).__name__}: {exc}")
         plan = skills.prepare_provision(snapshot.report, tool, arguments, self.manifest_agent)
         if plan["verdict"] != "accepted":
             issues = "; ".join(f"{i['field']}: {i['problem']}" for i in plan["issues"])
@@ -378,7 +375,7 @@ class CapabilityExecutor(AgentExecutor):
         log.info("Request parts %s -> %s", kinds,
                  f"skill {requests[0].get('skill')} {requests[0].get('tool') or ''} "
                  f"argument fields {sorted(requests[0].get('arguments') or {})}" if requests
-                 else "plain-text question for Claude")
+                 else "free text (not answered)")
         if requests and requests[0].get("skill") == "call_tool":
             arguments = requests[0].get("arguments")
             log.info("Received %s arguments %s", requests[0].get("tool"),
@@ -411,25 +408,23 @@ class BearerAuth:
         await self.app(scope, receive, send)
 
 
-def build_app(store: CapabilityStore, *, public_url: str, auth_token: str | None, answer: Answerer,
+def build_app(store: CapabilityStore, *, public_url: str, auth_token: str | None,
               warm_up: bool = True, manifest_provider: str = "valueops", manifest_agent: str = "infra",
               score_api: ScoreApi | None = None, manifest_plane: str = "resource") -> Starlette:
     card = agent_card(public_url, auth=bool(auth_token), actions=score_api is not None)
-    executor = CapabilityExecutor(store, answer, manifest_provider, manifest_agent, score_api, manifest_plane)
+    executor = CapabilityExecutor(store, manifest_provider, manifest_agent, score_api, manifest_plane)
     handler = DefaultRequestHandler(agent_executor=executor,
                                     task_store=InMemoryTaskStore(), agent_card=card)
 
     async def crawl_until_ready() -> None:
-        # Crawl once at startup so the first caller does not wait; later crawls happen on request.
-        while store.snapshot is None:
+        # Read the deterministic facts at startup (Git only, no LLM) so tool calls are ready at once. The LLM crawl
+        # happens only when a list_capabilities request arrives.
+        while store.facts_snapshot is None:
             try:
-                await asyncio.to_thread(store.current)
+                await asyncio.to_thread(store.facts)
             except Exception as exc:
-                # The store backs off after failures (1, 2, 4 ... 30 min), so this loop cannot re-run paid crawls
-                # every 30 seconds; it only waits for the next allowed attempt.
-                wait = max(30.0, store.retry_in())
-                log.error("Initial crawl not ready, next check in %ds: %s", int(wait), exc)
-                await asyncio.sleep(wait)
+                log.error("Reading the repositories failed, next attempt in 30s: %s", exc)
+                await asyncio.sleep(30)
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
@@ -442,9 +437,9 @@ def build_app(store: CapabilityStore, *, public_url: str, auth_token: str | None
         return JSONResponse({"status": "ok"})
 
     async def readyz(request):
-        snapshot = store.snapshot
+        snapshot = store.snapshot or store.facts_snapshot
         if snapshot is None:
-            return JSONResponse({"status": "crawling"}, status_code=503)
+            return JSONResponse({"status": "reading repositories"}, status_code=503)
         return JSONResponse({"status": "ready", "sources": snapshot.report["sources"]})
 
     routes = [*create_agent_card_routes(card), *create_jsonrpc_routes(handler, "/"),
@@ -458,8 +453,6 @@ def build_app(store: CapabilityStore, *, public_url: str, auth_token: str | None
 def main() -> None:
     import uvicorn
 
-    import qa
-
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
     # a2a-sdk 1.1.5 warns after every immediate Message reply because its dispatcher has already finished.
     logging.getLogger("a2a.server.events.event_queue_v2").setLevel(logging.ERROR)
@@ -468,7 +461,7 @@ def main() -> None:
         raise SystemExit("Set A2A_AUTH_TOKEN (or A2A_AUTH_TOKEN_FILE), or A2A_ALLOW_ANONYMOUS=true for local testing.")
     key = secret("ANTHROPIC_API_KEY")
     if not key:
-        raise SystemExit("Set ANTHROPIC_API_KEY (or ANTHROPIC_API_KEY_FILE): the agent needs Claude to crawl and answer.")
+        raise SystemExit("Set ANTHROPIC_API_KEY (or ANTHROPIC_API_KEY_FILE): list_capabilities needs Claude.")
     os.environ["ANTHROPIC_API_KEY"] = key
     model = os.environ.get("ANTHROPIC_MODEL", DEFAULT_MODEL)
 
@@ -492,7 +485,7 @@ def main() -> None:
         log.warning("SCORE_API_SECRET is not set: capabilities are listed but call_tool is disabled.")
     port = int(os.environ.get("PORT", "8080"))
     app = build_app(store, public_url=os.environ.get("PUBLIC_URL", f"http://localhost:{port}/"),
-                    auth_token=auth_token, answer=lambda snapshot, text: qa.answer(snapshot, text, model),
+                    auth_token=auth_token,
                     manifest_provider=os.environ.get("MANIFEST_PROVIDER", "valueops"),
                     manifest_agent=os.environ.get("MANIFEST_AGENT", "infra"), score_api=score_api,
                     manifest_plane=os.environ.get("MANIFEST_PLANE", "resource"))

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Check the capability agent's A2A server against throwaway Git repositories.
 
-The LLM crawl and the Q&A agent are replaced by stubs, so this runs without network or an API key;
-it checks the wiring (crawl on request, cache per commit, failures not cached) and the skills.
+The LLM crawl is replaced by a stub, so this runs without network or an API key. It checks the wiring: the LLM
+crawls only for list_capabilities (never for free text, check_request or start-up), results are cached per commit,
+failures are not cached, and the skills.
 """
 from pathlib import Path
 import tempfile
@@ -59,17 +60,12 @@ def fake_llm_crawl(facts: dict, roots: dict) -> dict:
     return report.merge_llm(facts, draft, roots, "fake")
 
 
-def fake_answer(snapshot, question: str):
-    return f"stub answer to: {question}", [{"skill": "list_capabilities",
-                                            "result": skills.list_capabilities(snapshot.report)}]
-
-
 with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     tmp = Path(tmp)
     module_repo, score_repo = make_fixture(tmp)
     store = CapabilityStore(str(module_repo), None, str(score_repo), None, tmp / "work",
                             describe=fake_llm_crawl, check_interval=0)
-    app = build_app(store, public_url="http://agent/", auth_token=TOKEN, answer=fake_answer, warm_up=False)
+    app = build_app(store, public_url="http://agent/", auth_token=TOKEN, warm_up=False)
 
     with TestClient(app) as client:
         assert client.get("/readyz").status_code == 503
@@ -77,7 +73,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         # A failed agent crawl is reported to the caller and not cached.
         fail_next_crawl = True
         text, _ = reply(send(client, {"data": {"skill": "list_capabilities"}}))
-        assert text.startswith("Could not crawl the repositories: RuntimeError"), text
+        assert text.startswith("Could not read the repositories: RuntimeError"), text
         assert store.snapshot is None and crawls == []
         fail_next_crawl = False
 
@@ -87,10 +83,14 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         assert 0 < store.retry_in() <= 60
         store._retry_at = 0.0  # the backoff has passed
 
-        # The first question triggers the crawl; later questions at the same commit reuse it.
-        text, data = reply(send(client, {"text": "What capabilities do you have?"}))
-        assert text == "stub answer to: What capabilities do you have?"
-        assert data["evidence"][0]["result"]["capabilities"][0]["summary"] == "PostgreSQL on Amazon RDS"
+        # Free text is never sent to the LLM and never crawls.
+        text, _ = reply(send(client, {"text": "What capabilities do you have?"}))
+        assert text.startswith("Free-text questions are not answered"), text
+        assert crawls == [], "free text must not crawl"
+
+        # list_capabilities is the only request that crawls; later ones at the same commit reuse it.
+        text, data = reply(send(client, {"data": {"skill": "list_capabilities", "detail": "summary"}}))
+        assert data["capabilities"][0]["summary"] == "PostgreSQL on Amazon RDS"
         text, data = reply(send(client, {"data": {"skill": "list_capabilities", "detail": "summary"}}))
         assert data["capabilities"][0]["aws_service"] == "Amazon RDS"
         assert len(crawls) == 1, crawls
@@ -162,11 +162,15 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 
         assert len(crawls) == 1, "same commit must not be re-crawled"
 
-        # A new commit adds a required variable the provisioner does not set; the next request re-crawls.
+        # A new commit adds a required variable the provisioner does not set. check_request sees it at once from the
+        # deterministic facts, without an LLM crawl; the next list_capabilities crawls the new commit.
         commit(module_repo, {"terraform-aws/main.tf": MAIN_TF + 'variable "subnet_group" { type = string }\n'}, "v2")
         text, data = reply(send(client, {"data": {"skill": "check_request", "request": {"score_type": "postgres"}}}))
-        assert len(crawls) == 2 and store.snapshot.commits[0] != first_commit
+        assert len(crawls) == 1, "check_request must never crawl with the LLM"
         assert data["verdict"] == "rejected" and data["issues"][0]["field"] == "subnet_group", data
+        assert store.facts_snapshot.commits[0] != first_commit
+        reply(send(client, {"data": {"skill": "list_capabilities"}}))
+        assert len(crawls) == 2 and store.snapshot.commits[0] != first_commit
         [cap] = store.snapshot.report["capabilities"]
         assert any("required variable `subnet_group`" in i for i in cap["score"]["binding_issues"])
 
@@ -181,5 +185,5 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 
     assert skills.check_request(store.snapshot.report, {"capability_id": "terraform-aws"})["verdict"] == "rejected"
 
-print("Capability A2A checks passed: crawl on request, cache per commit, failed crawls not cached, agent card, "
-      "bearer auth, list/check skills.")
+print("Capability A2A checks passed: LLM crawl only for list_capabilities, cache per commit, failed crawls not "
+      "cached, agent card, bearer auth, list/check skills.")

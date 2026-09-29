@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import logging
 from pathlib import Path
 import tempfile
@@ -150,6 +151,9 @@ def run_claude(system: str, prompt: str, tools: list[Callable[..., str]], model:
     # Only the models with those classifiers take the parameter; lighter models are sent without it.
     fallback = ({"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
                 if model.startswith(FALLBACK_MODELS) else {})
+    caching = ({"cache_control": {"type": "ephemeral"}}
+               if os.environ.get("ANTHROPIC_PROMPT_CACHING", "true").lower() != "false" else {})
+    # ANTHROPIC_BASE_URL (read by the SDK) points the client at a gateway, e.g. one serving azure_ai/claude-opus-4-8.
     runner = anthropic.Anthropic().beta.messages.tool_runner(
         model=model,
         max_tokens=16000,
@@ -158,8 +162,9 @@ def run_claude(system: str, prompt: str, tools: list[Callable[..., str]], model:
         messages=[{"role": "user", "content": prompt}],
         max_iterations=max_iterations,
         # Automatic prompt caching: each round re-sends the whole conversation (every file already read),
-        # so the cache point moves forward and earlier rounds are billed at the cache-read rate.
-        cache_control={"type": "ephemeral"},
+        # so the cache point moves forward and earlier rounds are billed at the cache-read rate. Some gateways do
+        # not accept it; ANTHROPIC_PROMPT_CACHING=false turns it off.
+        **caching,
         **fallback,
     )
     final, rounds = None, 0

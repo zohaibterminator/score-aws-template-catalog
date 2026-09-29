@@ -177,10 +177,19 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     store = CapabilityStore(str(tmp / "modules"), None, str(tmp / "score"), None, tmp / "work",
                             describe=fake_crawl, check_interval=0)
     score_api = ScoreApi("http://score-api", APP_SECRET, transport=httpx.MockTransport(fake_score_api))
-    app = build_app(store, public_url="http://agent/", auth_token=TOKEN, answer=None, warm_up=False,
+    app = build_app(store, public_url="http://agent/", auth_token=TOKEN, warm_up=False,
                     score_api=score_api)
 
     with TestClient(app) as client:
+        # Tool calls and checks run on deterministic facts: before any list_capabilities they never crawl with the LLM.
+        first = {"workload": "early-eks", "cluster_name": "early-eks", "aws_account_id": "412662188858",
+                 "region": "us-east-1", "kubernetes_version": "1.34", "api_allowed_cidrs": ["10.0.0.1/32"]}
+        task = rpc(client, {"skill": "call_tool", "tool": EKS, "arguments": first})["task"]
+        assert task["status"]["state"] == "TASK_STATE_COMPLETED", task["status"]
+        rpc(client, {"skill": "check_request", "request": {"score_type": "eks", "params": first}})
+        assert crawls == [], f"call_tool/check_request must not trigger the LLM crawl: {crawls}"
+        calls.clear()
+
         # The manifest offers EKS next to RDS, with the right required and optional inputs.
         manifest = rpc(client, {"skill": "list_capabilities"})["message"]["parts"][1]["data"]
         tools = {t["id"]: t for t in manifest["tools"]}

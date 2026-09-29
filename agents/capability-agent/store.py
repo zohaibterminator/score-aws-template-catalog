@@ -1,4 +1,10 @@
-"""Crawls the Git repos with the LLM agent when asked, and caches the result per commit."""
+"""Reads the Git repos and caches the result per commit.
+
+Two views, with different costs:
+  current(): the LLM crawl (Claude describes the capabilities). Used only for list_capabilities.
+  facts():   deterministic Terraform and Score facts from Git, no LLM. Used for everything else, including every
+             score-api call, check_request and start-up. It reuses the LLM crawl when that is for the same commits.
+"""
 from __future__ import annotations
 
 from collections import deque
@@ -51,6 +57,8 @@ class CapabilityStore:
         self.workdir, self.describe, self.check_interval = workdir, describe, check_interval
         self._snapshot: Snapshot | None = None
         self._checked_at = 0.0
+        self._facts: Snapshot | None = None
+        self._facts_checked_at = 0.0
         self._lock = threading.Lock()
         self._dirs: deque[Path] = deque()
         self._builds = 0
@@ -70,8 +78,29 @@ class CapabilityStore:
     def snapshot(self) -> Snapshot | None:
         return self._snapshot
 
+    @property
+    def facts_snapshot(self) -> Snapshot | None:
+        return self._facts
+
+    def _wanted(self) -> tuple[str, str | None]:
+        return (remote_commit(self.module_repo, self.module_ref),
+                remote_commit(self.score_repo, self.score_ref) if self.score_repo else None)
+
+    def facts(self) -> Snapshot:
+        """Deterministic facts for the commits the refs point to now. Never calls the LLM."""
+        with self._lock:
+            if self._facts and time.time() - self._facts_checked_at < self.check_interval:
+                return self._facts
+            wanted = self._wanted()
+            if self._snapshot and self._snapshot.commits == wanted:
+                self._facts = self._snapshot          # the LLM crawl of these commits is a superset of the facts
+            elif not self._facts or self._facts.commits != wanted:
+                self._facts = self._build(use_llm=False)
+            self._facts_checked_at = time.time()
+            return self._facts
+
     def current(self) -> Snapshot:
-        """Snapshot for the commits the refs point to now; crawls the repos with the agent if they moved."""
+        """LLM crawl for the commits the refs point to now; crawls with Claude if they moved. list_capabilities only."""
         with self._lock:
             if self._snapshot and time.time() - self._checked_at < self.check_interval:
                 return self._snapshot
@@ -80,11 +109,10 @@ class CapabilityStore:
                 if self._snapshot:
                     return self._snapshot
                 raise CrawlUnavailable(f"{self._last_error}; next attempt in {int(self.retry_in())}s")
-            wanted = (remote_commit(self.module_repo, self.module_ref),
-                      remote_commit(self.score_repo, self.score_ref) if self.score_repo else None)
+            wanted = self._wanted()
             if not self._snapshot or self._snapshot.commits != wanted:
                 try:
-                    self._snapshot = self._crawl()
+                    self._snapshot = self._build(use_llm=True)
                 except Exception as exc:
                     self._failures += 1
                     delay = min(60 * 2 ** (self._failures - 1), 1800)
@@ -125,14 +153,18 @@ class CapabilityStore:
             raise CrawlUnavailable(f"crawl budget of {self.max_crawls_per_hour} per hour used up")
         self._llm_crawls.append(now)
 
-    def _crawl(self) -> Snapshot:
+    def _build(self, use_llm: bool) -> Snapshot:
         self._builds += 1
         target = self.workdir / f"build-{self._builds}"
         try:
             modules = checkout(self.module_repo, self.module_ref, target / "modules")
             score = checkout(self.score_repo, self.score_ref, target / "score") if self.score_repo else None
             roots = {"modules": modules.path} | ({"score": score.path} if score else {})
-            report = self._reuse(modules, score)
+            if not use_llm:
+                report = report_builder.build(modules, score)
+                log.info("Read deterministic facts at %s (no LLM)", modules.commit)
+            else:
+                report = self._reuse(modules, score)
             if report is None:
                 self._spend_crawl_budget()
                 log.info("Agent crawling %s@%s with Claude", self.module_repo, modules.commit)
@@ -142,7 +174,7 @@ class CapabilityStore:
             shutil.rmtree(target, ignore_errors=True)
             raise
         self._dirs.append(target)
-        while len(self._dirs) > 2:  # keep the previous checkout for requests still reading it
+        while len(self._dirs) > 3:  # keep recent checkouts (LLM and facts) for requests still reading them
             shutil.rmtree(self._dirs.popleft(), ignore_errors=True)
         log.info("Agent found %d capabilities at %s", len(report["capabilities"]), modules.commit)
         return Snapshot(report, roots, (modules.commit, score.commit if score else None))
