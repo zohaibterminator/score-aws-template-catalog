@@ -88,12 +88,26 @@ SCORE_TYPES: dict[str, dict[str, Any]] = {
             "allowed": {"environment": ENVIRONMENTS, "plane": PLANES},
             "inputs": ["cluster_name", "aws_account_id", "region", "kubernetes_version", "environment"]},
     # SSM bastion into an EKS VPC, requested separately from the cluster; the module validates the rest.
-    # ssh_key_name and public_subnet_id are needed only with bastion_access_mode "ssh" (score-api checks that).
+    # public_subnet_id is needed only with bastion_access_mode "ssh"; ssh_key_name defaults to "platform-bastion".
     "network-access": {"endpoint": "network-access", "fields": ["workload"],
                        "allowed": {"environment": ENVIRONMENTS, "plane": PLANES, "bastion_access_mode": ["ssm", "ssh"]},
                        "inputs": ["name", "aws_account_id", "region", "environment", "cluster_name", "vpc_id", "vpc_cidr", "subnet_id",
                                   "cluster_security_group_id", "bastion_access_mode", "ssh_key_name", "public_subnet_id"],
-                       "require": ["cluster_security_group_id"]},
+                       "require": ["cluster_security_group_id"],
+                       "when": {("bastion_access_mode", "ssh"): ["public_subnet_id"]}},
+}
+# The modules' own can(regex(...)) validations, checked before score-api and advertised as schema patterns so forms
+# can validate too. Keep in step with score-tf-modules variables.tf.
+_ID = "[0-9a-f]{8,17}$"
+INPUT_PATTERNS = {
+    "eks": {"cluster_name": "^[a-z][a-z0-9-]{1,26}[a-z0-9]$", "aws_account_id": "^[0-9]{12}$",
+            "region": "^[a-z]{2}(-gov)?-[a-z]+-[0-9]$", "kubernetes_version": "^1[.][0-9]{2}$"},
+    "network-access": {"name": "^[a-z][a-z0-9-]{1,38}[a-z0-9]$", "cluster_name": "^[a-z][a-z0-9-]{1,26}[a-z0-9]$",
+                       "aws_account_id": "^[0-9]{12}$", "region": "^[a-z]{2}(-gov)?-[a-z]+-[0-9]$",
+                       "vpc_id": "^vpc-" + _ID, "subnet_id": "^subnet-" + _ID, "public_subnet_id": "^subnet-" + _ID,
+                       "cluster_security_group_id": "^sg-" + _ID,
+                       "vpc_cidr": "^([0-9]{1,3}[.]){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$",
+                       "ssh_key_name": "^[A-Za-z0-9._-]{1,255}$"},
 }
 # Status filters: the prefix of each capability's Terraform CR names.
 CAPABILITIES = ["rds", "eks", "network-access"]
@@ -194,6 +208,9 @@ def tool_manifest(report: dict[str, Any], platform: str = "valueops", agent: str
                     r for r in spec.get("require", []) if r in properties and r not in required]
                 for r in spec.get("require", []):
                     properties.get(r, {}).pop("default", None)
+                for field, pattern in INPUT_PATTERNS.get(entry["score_type"], {}).items():
+                    if field in properties:
+                        properties[field] = {**properties[field], "pattern": pattern}
             for field, allowed in spec["allowed"].items():
                 if field in properties:
                     properties[field] = {**properties[field], "enum": allowed}
@@ -409,9 +426,18 @@ def prepare_provision(report: dict[str, Any], tool_id: str, arguments: dict[str,
             {"field": "tool", "problem": f"{tool_id} is listed but score-api cannot provision it yet"}]}
 
     spec = SCORE_TYPES[entry["score_type"]]
-    arguments = dict(arguments)
+    # Form fields often carry stray spaces ("subnet-0b89...  "); a trimmed value is what the user meant.
+    arguments = {k: v.strip() if isinstance(v, str) else v for k, v in arguments.items()}
     fields = {f: arguments.pop(f, None) for f in spec["fields"]}
     issues = []
+    for field, pattern in INPUT_PATTERNS.get(entry["score_type"], {}).items():
+        value = arguments.get(field)
+        if value not in (None, "") and not (isinstance(value, str) and re.match(pattern, value)):
+            issues.append({"field": field, "problem": f"{value!r} must match {pattern}"})
+    for (field, wanted), needed in spec.get("when", {}).items():
+        if str(arguments.get(field, "")).lower() == wanted:
+            issues += [{"field": n, "problem": f"required when {field} is {wanted!r}"}
+                       for n in needed if not arguments.get(n)]
     if "inputs" in spec:
         issues += [{"field": k, "problem": "set by the platform; not a request input"}
                    for k in sorted(arguments) if k not in spec["inputs"]]

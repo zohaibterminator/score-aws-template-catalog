@@ -126,8 +126,8 @@ Wait for `Agent found N capabilities at <commit>` in the log. One-shot crawl wit
 
 1. **Build and push the image** from this directory (PowerShell or any shell):
    ```sh
-   podman build -t docker.io/abdurrahman126/score-capability-agent:0.3.10 .
-   podman push docker.io/abdurrahman126/score-capability-agent:0.3.10
+   podman build -t docker.io/abdurrahman126/score-capability-agent:0.3.11 .
+   podman push docker.io/abdurrahman126/score-capability-agent:0.3.11
    ```
 2. **Set up Vault** as described at the top of [`k8s/vault-policy.hcl`](k8s/vault-policy.hcl): a policy, a `capability-agent-role` bound to the `score-capability-agent` service account, and `secret/capability-agent/config` with `a2a_token`, `anthropic_api_key` and `git_token` (a read-only GitHub token for both repos). The policy also reads score-api's `secret/score-api/app-secret`, so the agent can call score-api.
 3. **Apply the single manifest** [`k8s/capability-agent.yaml`](k8s/capability-agent.yaml) (ServiceAccount, Deployment, Service, TLS Issuer/Certificate, Ingress). In Rancher: cluster → Import YAML → namespace `default`. Or:

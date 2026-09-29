@@ -97,12 +97,23 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         for bad, field in (({**request, "bastion_access_mode": "rdp"}, "bastion_access_mode"),
                            ({**request, "ssh_allowed_cidrs": ["0.0.0.0/0"]}, "ssh_allowed_cidrs"),
                            ({**request, "enable_ssm_vpc_endpoints": True}, "enable_ssm_vpc_endpoints"),
+                           ({**request, "name": "Kuch Bhi"}, "name"),
+                           ({**request, "vpc_id": "vpc-xyz"}, "vpc_id"),
+                           ({**request, "bastion_access_mode": "ssh", "ssh_key_name": "platform-bastion"},
+                            "public_subnet_id"),
                            ({k: v for k, v in request.items() if k != "cluster_security_group_id"},
                             "cluster_security_group_id"),
                            ({k: v for k, v in request.items() if k != "vpc_id"}, "vpc_id")):
             data = rpc(client, {"skill": "call_tool", "tool": TOOL, "arguments": bad})["message"]["parts"][1]["data"]
             assert data["verdict"] == "rejected" and field in {i["field"] for i in data["issues"]}, (field, data)
         assert len(calls) == before, "invalid requests must not reach score-api"
+
+        # Stray spaces from a form are trimmed, and the patterns are advertised for forms to validate.
+        rpc(client, {"skill": "call_tool", "tool": TOOL, "arguments": {
+            **request, "bastion_access_mode": "ssh", "public_subnet_id": "subnet-0b892efbdce3dd1a9  "}})
+        assert calls[-1][1]["public_subnet_id"] == "subnet-0b892efbdce3dd1a9", calls[-1][1]
+        assert calls[-1][1]["ssh_key_name"] == "platform-bastion", "ssh mode defaults to the platform key pair"
+        assert props["name"]["pattern"] == "^[a-z][a-z0-9-]{1,38}[a-z0-9]$"
 
         data = rpc(client, {"skill": "call_tool", "tool": "infra.score_api.resource_status",
                             "arguments": {"capability": "network-access"}})
