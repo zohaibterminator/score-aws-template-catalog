@@ -69,7 +69,9 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         props = schema["properties"]
         assert props["bastion_access_mode"]["enum"] == ["ssm", "ssh"] and props["bastion_access_mode"]["default"] == "ssm"
         assert props["enable_bastion"]["default"] is True and props["enable_ssm_vpc_endpoints"]["default"] is False
-        assert props["bastion_instance_type"]["default"] == "t3.micro" and props["ssh_allowed_cidrs"]["default"] == []
+        assert props["bastion_instance_type"]["default"] == "t3.micro"
+        # The allow-lists are fixed in score-tf-modules/access-lists: no tool offers them as arguments.
+        assert not {"ssh_allowed_cidrs", "ingress_allowed_cidrs", "api_allowed_cidrs"} & set(props), sorted(props)
         assert "tags" not in props and "image" not in props
         assert "bastion" in tools["infra.score_api.delete_all_resources"]["description"]
         assert "network-access" in tools["infra.score_api.resource_status"]["inputSchema"]["properties"]["capability"]["enum"]
@@ -83,15 +85,14 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         endpoint, body = calls[-1]
         assert endpoint == "network-access", calls[-1]
         assert body["workload"] == "platform-access" and body["bastion_access_mode"] == "ssm"
-        assert body["enable_bastion"] is True and body["ssh_allowed_cidrs"] == []
+        assert body["enable_bastion"] is True and "ssh_allowed_cidrs" not in body
         assert "runner_vault_role" not in body and "image" not in body
 
         # Name patterns (can(regex(...))) are left to score-api and the Terraform plan; the agent checks enums,
         # contains() rules and required params.
         before = len(calls)
         for bad, field in (({**request, "bastion_access_mode": "rdp"}, "bastion_access_mode"),
-                           ({**request, "bastion_access_mode": "ssh", "ssh_key_name": "kp",
-                             "ssh_allowed_cidrs": ["0.0.0.0/0"]}, "ssh_allowed_cidrs"),
+                           ({**request, "ssh_allowed_cidrs": ["0.0.0.0/0"]}, "ssh_allowed_cidrs"),
                            ({k: v for k, v in request.items() if k != "vpc_id"}, "vpc_id")):
             data = rpc(client, {"skill": "call_tool", "tool": TOOL, "arguments": bad})["message"]["parts"][1]["data"]
             assert data["verdict"] == "rejected" and field in {i["field"] for i in data["issues"]}, (field, data)

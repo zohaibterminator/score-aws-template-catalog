@@ -159,7 +159,7 @@ def agent_card(public_url: str, auth: bool, actions: bool = False) -> AgentCard:
                       '{"workload": "checkout-api", "image": "nginx:latest", "environment": "dev"}}',
                       '{"skill": "call_tool", "tool": "infra.aws_terraform.provision_eks", "arguments": '
                       '{"workload": "team-eks", "cluster_name": "team-eks", "aws_account_id": "123456789012", '
-                      '"region": "us-east-1", "kubernetes_version": "1.34", "api_allowed_cidrs": ["203.0.113.10/32"]}}'],
+                      '"region": "us-east-1", "kubernetes_version": "1.34"}}'],
         ))
     if auth:
         card.security_schemes["bearer"].CopyFrom(
