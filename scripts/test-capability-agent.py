@@ -125,9 +125,19 @@ def fake_message(i: int, stop: str):
     return SimpleNamespace(usage=usage, stop_reason=stop, stop_details=None, content=[])
 
 
+class FakeStream:
+    def __init__(self, message):
+        self.message = message
+
+    def get_final_message(self):
+        return self.message
+
+
 class FakeClient:
     def __init__(self, *args, **kwargs):
-        runner = lambda **kw: sent.update(kw) or iter([fake_message(1, "tool_use"), fake_message(2, "end_turn")])  # noqa: E731
+        sent["client"] = kwargs
+        runner = lambda **kw: sent.update(kw) or iter([FakeStream(fake_message(1, "tool_use")),  # noqa: E731
+                                                       FakeStream(fake_message(2, "end_turn"))])
         self.beta = SimpleNamespace(messages=SimpleNamespace(tool_runner=runner))
 
 
@@ -148,6 +158,9 @@ try:
 finally:
     anthropic.Anthropic = real_client
 assert sent["cache_control"] == {"type": "ephemeral"}, sent.keys()
+# A gateway timeout must never re-send and re-bill a request: no SDK retries, streamed rounds, long timeout.
+assert sent["client"]["max_retries"] == 0 and sent["stream"] is True, (sent["client"], sent.get("stream"))
+assert sent["client"]["timeout"].read == 900.0
 assert "fallbacks" not in sent  # sonnet gets no refusal fallback
 line = next(r for r in Capture.records if r.startswith("Claude crawl"))
 assert "2 rounds, input 300, cache read 3000, cache write 20, output 10 tokens" in line, line

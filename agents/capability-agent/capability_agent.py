@@ -154,13 +154,18 @@ def run_claude(system: str, prompt: str, tools: list[Callable[..., str]], model:
     caching = ({"cache_control": {"type": "ephemeral"}}
                if os.environ.get("ANTHROPIC_PROMPT_CACHING", "true").lower() != "false" else {})
     # ANTHROPIC_BASE_URL (read by the SDK) points the client at a gateway, e.g. one serving azure_ai/claude-opus-4-8.
-    runner = anthropic.Anthropic().beta.messages.tool_runner(
+    # No automatic retries: a gateway timeout must not re-send (and re-bill) a request whose first copy the gateway
+    # still completes upstream. Streaming keeps tokens flowing, so idle timeouts (e.g. an ingress closing silent
+    # connections after 60 s) cannot cut a long response in the first place.
+    client = anthropic.Anthropic(max_retries=0, timeout=anthropic.Timeout(900.0, connect=30.0))
+    runner = client.beta.messages.tool_runner(
         model=model,
         max_tokens=16000,
         system=system,
         tools=[beta_tool(fn) for fn in tools],
         messages=[{"role": "user", "content": prompt}],
         max_iterations=max_iterations,
+        stream=True,
         # Automatic prompt caching: each round re-sends the whole conversation (every file already read),
         # so the cache point moves forward and earlier rounds are billed at the cache-read rate. Some gateways do
         # not accept it; ANTHROPIC_PROMPT_CACHING=false turns it off.
@@ -170,7 +175,8 @@ def run_claude(system: str, prompt: str, tools: list[Callable[..., str]], model:
     final, rounds = None, 0
     used = {"input_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "output_tokens": 0}
     try:
-        for message in runner:
+        for stream in runner:
+            message = stream.get_final_message()   # consumes the streamed round
             final, rounds = message, rounds + 1
             for key in used:
                 used[key] += getattr(message.usage, key, None) or 0
