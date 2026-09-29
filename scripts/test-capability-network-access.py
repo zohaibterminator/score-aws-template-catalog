@@ -65,11 +65,13 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         assert TOOL in tools, tools.keys()
         schema = tools[TOOL]["inputSchema"]
         assert set(schema["required"]) == {"workload", "name", "aws_account_id", "region", "vpc_id", "subnet_id",
-                                           "vpc_cidr", "cluster_name"}, schema["required"]
+                                           "vpc_cidr", "cluster_name", "cluster_security_group_id"}, schema["required"]
         props = schema["properties"]
         assert props["bastion_access_mode"]["enum"] == ["ssm", "ssh"] and props["bastion_access_mode"]["default"] == "ssm"
-        assert props["enable_bastion"]["default"] is True and props["enable_ssm_vpc_endpoints"]["default"] is False
-        assert props["bastion_instance_type"]["default"] == "t3.micro"
+        # Only what a user supplies is an input; bastion size, endpoints, ingress settings keep platform defaults.
+        assert set(props) == {"workload", "name", "aws_account_id", "region", "environment", "cluster_name", "vpc_id",
+                              "vpc_cidr", "subnet_id", "cluster_security_group_id", "bastion_access_mode",
+                              "ssh_key_name", "public_subnet_id"}, sorted(props)
         # The allow-lists are fixed in score-tf-modules/access-lists: no tool offers them as arguments.
         assert not {"ssh_allowed_cidrs", "ingress_allowed_cidrs", "api_allowed_cidrs"} & set(props), sorted(props)
         assert "tags" not in props and "image" not in props
@@ -78,7 +80,8 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 
         request = {"workload": "platform-access", "name": "score-dev-access", "aws_account_id": "412662188858",
                    "region": "us-east-1", "vpc_id": "vpc-0123456789abcdef0", "subnet_id": "subnet-0123456789abcdef0",
-                   "vpc_cidr": "10.90.0.0/16", "cluster_name": "score-dev-eks", "bastion_access_mode": "SSM"}
+                   "vpc_cidr": "10.90.0.0/16", "cluster_name": "score-dev-eks", "bastion_access_mode": "SSM",
+                   "cluster_security_group_id": "sg-0123456789abcdef0"}
         task = rpc(client, {"skill": "call_tool", "tool": TOOL, "arguments": request})["task"]
         assert task["status"]["state"] == "TASK_STATE_COMPLETED", task["status"]
         assert "network-access-5e1a2b3c" in task["status"]["message"]["parts"][0]["text"]
@@ -93,6 +96,9 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         before = len(calls)
         for bad, field in (({**request, "bastion_access_mode": "rdp"}, "bastion_access_mode"),
                            ({**request, "ssh_allowed_cidrs": ["0.0.0.0/0"]}, "ssh_allowed_cidrs"),
+                           ({**request, "enable_ssm_vpc_endpoints": True}, "enable_ssm_vpc_endpoints"),
+                           ({k: v for k, v in request.items() if k != "cluster_security_group_id"},
+                            "cluster_security_group_id"),
                            ({k: v for k, v in request.items() if k != "vpc_id"}, "vpc_id")):
             data = rpc(client, {"skill": "call_tool", "tool": TOOL, "arguments": bad})["message"]["parts"][1]["data"]
             assert data["verdict"] == "rejected" and field in {i["field"] for i in data["issues"]}, (field, data)

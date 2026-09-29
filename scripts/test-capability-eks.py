@@ -33,13 +33,6 @@ variable "cluster_name" {
 variable "aws_account_id" { type = string }
 variable "region" { type = string }
 variable "kubernetes_version" { type = string }
-variable "api_allowed_cidrs" {
-  type = list(string)
-  validation {
-    condition     = !contains(var.api_allowed_cidrs, "0.0.0.0/0")
-    error_message = "no 0.0.0.0/0"
-  }
-}
 variable "environment" {
   type    = string
   default = "dev"
@@ -80,7 +73,6 @@ EKS_PROVISIONER = """
     awsAccountId: {{ .Params.aws_account_id | quote }}
     region: {{ .Params.region | quote }}
     kubernetesVersion: {{ .Params.kubernetes_version | quote }}
-    apiAllowedCidrs: {{ .Params.api_allowed_cidrs | toJson }}
     environment: {{ .Params.environment | default "dev" | quote }}
     azs: {{ .Params.azs | default list | toJson }}
     nodeInstanceTypes: {{ .Params.node_instance_types | default (list "t3.small") | toJson }}
@@ -108,8 +100,6 @@ EKS_PROVISIONER = """
             value: {{ .Init.region | quote }}
           - name: kubernetes_version
             value: {{ .Init.kubernetesVersion | quote }}
-          - name: api_allowed_cidrs
-            value: {{ .Init.apiAllowedCidrs | toJson }}
           - name: environment
             value: {{ .Init.environment | quote }}
           - name: azs
@@ -183,7 +173,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     with TestClient(app) as client:
         # Tool calls and checks run on deterministic facts: before any list_capabilities they never crawl with the LLM.
         first = {"workload": "early-eks", "cluster_name": "early-eks", "aws_account_id": "412662188858",
-                 "region": "us-east-1", "kubernetes_version": "1.34", "api_allowed_cidrs": ["10.0.0.1/32"]}
+                 "region": "us-east-1", "kubernetes_version": "1.34"}
         task = rpc(client, {"skill": "call_tool", "tool": EKS, "arguments": first})["task"]
         assert task["status"]["state"] == "TASK_STATE_COMPLETED", task["status"]
         rpc(client, {"skill": "check_request", "request": {"score_type": "eks", "params": first}})
@@ -196,9 +186,10 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         assert {EKS, POSTGRES} <= set(tools), tools.keys()
         schema = tools[EKS]["inputSchema"]
         assert set(schema["required"]) == {"workload", "cluster_name", "aws_account_id", "region",
-                                           "kubernetes_version", "api_allowed_cidrs"}, schema["required"]
-        assert "image" not in schema["properties"]
-        assert schema["properties"]["azs"]["default"] == [] and schema["properties"]["node_min_size"]["default"] == 1
+                                           "kubernetes_version"}, schema["required"]
+        # Only what a user supplies is an input; the rest (network, nodes, ingress) keeps its platform default.
+        assert set(schema["properties"]) == {"workload", "cluster_name", "aws_account_id", "region",
+                                             "kubernetes_version", "environment"}, sorted(schema["properties"])
         assert schema["properties"]["environment"]["enum"] == ["dev", "staging", "uat", "dr", "prod"]
         assert "tags" not in schema["properties"], "tags are set by Score, not by callers"
         assert set(tools[POSTGRES]["inputSchema"]["required"]) == {"workload", "image"}
@@ -206,8 +197,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 
         # Provisioning calls /cgi-bin/eks with the workload and the params flat, defaults filled in.
         request = {"workload": "team-eks", "cluster_name": "team-eks", "aws_account_id": "412662188858",
-                   "region": "us-east-1", "kubernetes_version": "1.34", "api_allowed_cidrs": ["10.0.0.1/32"],
-                   "environment": "Dev"}
+                   "region": "us-east-1", "kubernetes_version": "1.34", "environment": "Dev"}
         task = rpc(client, {"skill": EKS, **request})["task"]
         assert task["status"]["state"] == "TASK_STATE_COMPLETED", task["status"]
         assert "eks-3f1a2b3c" in task["status"]["message"]["parts"][0]["text"]
@@ -226,6 +216,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         # Invalid requests never reach score-api.
         before = len(calls)
         for bad, field in (({**request, "api_allowed_cidrs": ["0.0.0.0/0"]}, "api_allowed_cidrs"),
+                           ({**request, "node_min_size": 3}, "node_min_size"),
                            ({**request, "kubernetes_version": 1.3}, "kubernetes_version"),
                            ({k: v for k, v in request.items() if k != "cluster_name"}, "cluster_name"),
                            ({k: v for k, v in request.items() if k != "workload"}, "workload")):
@@ -248,10 +239,11 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         # ...but a provisioner change must.
         commit(tmp / "score", {"eks/.score-k8s/eks.provisioners.yaml": EKS_PROVISIONER.replace("t3.small", "t3.medium")},
                "change eks default instance type")
-        manifest = rpc(client, {"skill": "list_capabilities"})["message"]["parts"][1]["data"]
+        rpc(client, {"skill": "list_capabilities"})
         assert len(crawls) == 2, crawls
-        eks_schema = {t["id"]: t for t in manifest["tools"]}[EKS]["inputSchema"]
-        assert eks_schema["properties"]["node_instance_types"]["default"] == ["t3.medium"]
+        store._facts_checked_at = 0
+        rpc(client, {"skill": EKS, **request})
+        assert calls[-1][1]["node_instance_types"] == ["t3.medium"], "the platform default follows the provisioner"
 
 # delete-all summaries describe the moment the call ended, once, without repeating score-api's msg.
 summary = _outcome({"status": "partial", "wiped_workloads": "rds-smoke", "wiped_eks_workloads": "eks-smoke",

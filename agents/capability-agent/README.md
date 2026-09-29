@@ -126,8 +126,8 @@ Wait for `Agent found N capabilities at <commit>` in the log. One-shot crawl wit
 
 1. **Build and push the image** from this directory (PowerShell or any shell):
    ```sh
-   podman build -t docker.io/abdurrahman126/score-capability-agent:0.3.7 .
-   podman push docker.io/abdurrahman126/score-capability-agent:0.3.7
+   podman build -t docker.io/abdurrahman126/score-capability-agent:0.3.10 .
+   podman push docker.io/abdurrahman126/score-capability-agent:0.3.10
    ```
 2. **Set up Vault** as described at the top of [`k8s/vault-policy.hcl`](k8s/vault-policy.hcl): a policy, a `capability-agent-role` bound to the `score-capability-agent` service account, and `secret/capability-agent/config` with `a2a_token`, `anthropic_api_key` and `git_token` (a read-only GitHub token for both repos). The policy also reads score-api's `secret/score-api/app-secret`, so the agent can call score-api.
 3. **Apply the single manifest** [`k8s/capability-agent.yaml`](k8s/capability-agent.yaml) (ServiceAccount, Deployment, Service, TLS Issuer/Certificate, Ingress). In Rancher: cluster → Import YAML → namespace `default`. Or:
@@ -145,6 +145,7 @@ The pod has no RBAC and no cloud credentials. It runs as non-root with a read-on
 - `scripts/test-capability-a2a.py` covers crawl on request, caching per commit, failed crawls not being cached, auth, and the skills.
 - `scripts/test-capability-actions.py` covers `call_tool` against a fake score-api: validation before the call, provision and delete-all tasks, `returnImmediately` with `GetTask`, and credential handling.
 - `scripts/test-capability-eks.py` covers EKS: a Score project in a sub-folder, list and number defaults, the `provision_eks` tool, execution through `/cgi-bin/eks`, validation before score-api, and reusing the crawl when score-api only committed request state.
+- `scripts/test-capability-probe.py` checks that plain curls to the URL (no token, no skill, free text, the public agent card, health endpoints) never return capabilities or start a crawl, and that list_capabilities drops a removed variable at once when the last crawl is older than the commit.
 - `scripts/test-capability-network-access.py` runs the real `network-access` module and provisioner (sibling checkouts of score-tf-modules and score-gp-aws-rds; skipped when absent) through the manifest, validation and `/cgi-bin/network-access` execution.
 
 All four run against throwaway Git repos with the LLM stubbed out, so they need no network or API key, and all run from `scripts/validate.sh`. They check the wiring, not the model's judgement. Check that by running locally with a real key.

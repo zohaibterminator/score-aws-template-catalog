@@ -43,6 +43,24 @@ def _changed_files(repo: Path, old: str, new: str) -> list[str] | None:
     return result.stdout.split() if result.returncode == 0 else None
 
 
+def overlay_descriptions(facts: dict[str, Any], described: dict[str, Any]) -> dict[str, Any]:
+    """The facts report with the LLM prose of an older crawl, for capabilities and variables that still exist."""
+    report = copy.deepcopy(facts)
+    old = {c["id"]: c for c in described.get("capabilities", [])}
+    for capability in report["capabilities"]:
+        previous = old.get(capability["id"])
+        if not previous:
+            continue
+        for key in ("summary", "aws_service"):
+            if previous.get(key) and not capability.get(key):
+                capability[key] = previous[key]
+        effects = {p["terraform_variable"]: p.get("effect") for p in previous.get("parameters", [])}
+        for parameter in capability["parameters"]:
+            if effects.get(parameter["terraform_variable"]) and not parameter.get("effect"):
+                parameter["effect"] = effects[parameter["terraform_variable"]]
+    return report
+
+
 @dataclass(frozen=True)
 class Snapshot:
     report: dict[str, Any]
@@ -162,6 +180,20 @@ class CapabilityStore:
                 self._failures, self._retry_at, self._last_error = 0, 0.0, ""
             self._checked_at = time.time()
             return self._snapshot
+
+    def described(self) -> Snapshot:
+        """list_capabilities: the current commits' facts (params, types, defaults, required) with the LLM's prose.
+
+        When the LLM crawl is older than the refs (crawl budget used up, or a crawl failed), its descriptions are laid
+        over the current facts instead of serving its stale parameters: a variable removed from the modules must
+        disappear from the tools at once, without waiting for (or paying for) a new crawl.
+        """
+        llm = self.current()
+        facts = self.facts()
+        if llm.commits == facts.commits:
+            return llm
+        log.info("Serving facts at %s with descriptions from the crawl of %s", facts.commits, llm.commits)
+        return Snapshot(overlay_descriptions(facts.report, llm.report), facts.roots, facts.commits)
 
     def _reuse(self, modules, score) -> dict[str, Any] | None:
         """The previous report, when only non-capability files changed in the Score repo since it was built.

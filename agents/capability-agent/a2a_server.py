@@ -155,11 +155,8 @@ def agent_card(public_url: str, auth: bool, actions: bool = False) -> AgentCard:
                         "delete-all, which takes 5-20 minutes); requests that fail validation are rejected "
                         "before score-api is called.",
             tags=["score", "provisioning"], input_modes=["application/json"], output_modes=["application/json"],
-            examples=['{"skill": "call_tool", "tool": "infra.aws_terraform.provision_postgres", "arguments": '
-                      '{"workload": "checkout-api", "image": "nginx:latest", "environment": "dev"}}',
-                      '{"skill": "call_tool", "tool": "infra.aws_terraform.provision_eks", "arguments": '
-                      '{"workload": "team-eks", "cluster_name": "team-eks", "aws_account_id": "123456789012", '
-                      '"region": "us-east-1", "kubernetes_version": "1.34"}}'],
+            # Generic on purpose: the card is public, so it names no real tool; list_capabilities (authenticated) does.
+            examples=['{"skill": "call_tool", "tool": "<tool id from list_capabilities>", "arguments": {...}}'],
         ))
     if auth:
         card.security_schemes["bearer"].CopyFrom(
@@ -264,7 +261,7 @@ class CapabilityExecutor(AgentExecutor):
         if skill not in ("list_capabilities", "check_request"):
             return self._parts(f"Unknown skill {skill!r}. {USAGE}")
         try:
-            snapshot = await asyncio.to_thread(self.store.current if skill == "list_capabilities" else self.store.facts)
+            snapshot = await asyncio.to_thread(self.store.described if skill == "list_capabilities" else self.store.facts)
         except Exception as exc:
             log.exception("Reading the repositories failed")
             return self._parts(f"Could not read the repositories: {type(exc).__name__}: {exc}")
@@ -440,7 +437,7 @@ def build_app(store: CapabilityStore, *, public_url: str, auth_token: str | None
         snapshot = store.snapshot or store.facts_snapshot
         if snapshot is None:
             return JSONResponse({"status": "reading repositories"}, status_code=503)
-        return JSONResponse({"status": "ready", "sources": snapshot.report["sources"]})
+        return JSONResponse({"status": "ready"})   # no repositories or capabilities on unauthenticated paths
 
     routes = [*create_agent_card_routes(card), *create_jsonrpc_routes(handler, "/"),
               Route("/healthz", healthz), Route("/readyz", readyz)]
