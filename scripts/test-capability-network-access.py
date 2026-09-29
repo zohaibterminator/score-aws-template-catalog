@@ -88,7 +88,8 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         endpoint, body = calls[-1]
         assert endpoint == "network-access", calls[-1]
         assert body["workload"] == "platform-access" and body["bastion_access_mode"] == "ssm"
-        assert body["enable_bastion"] is True and "ssh_allowed_cidrs" not in body
+        # Only the user's inputs go to score-api: an empty hidden default (node_security_group_id "") was rejected.
+        assert not {"enable_bastion", "node_security_group_id", "bastion_ami_id", "ssh_allowed_cidrs"} & set(body), body
         assert "runner_vault_role" not in body and "image" not in body
 
         # Name patterns (can(regex(...))) are left to score-api and the Terraform plan; the agent checks enums,
@@ -112,7 +113,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         rpc(client, {"skill": "call_tool", "tool": TOOL, "arguments": {
             **request, "bastion_access_mode": "ssh", "public_subnet_id": "subnet-0b892efbdce3dd1a9  "}})
         assert calls[-1][1]["public_subnet_id"] == "subnet-0b892efbdce3dd1a9", calls[-1][1]
-        assert calls[-1][1]["ssh_key_name"] == "platform-bastion", "ssh mode defaults to the platform key pair"
+        assert "ssh_key_name" not in calls[-1][1], "the provisioner defaults ssh_key_name to platform-bastion"
         assert props["name"]["pattern"] == "^[a-z][a-z0-9-]{1,38}[a-z0-9]$"
 
         data = rpc(client, {"skill": "call_tool", "tool": "infra.score_api.resource_status",

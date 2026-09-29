@@ -204,14 +204,15 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         endpoint, body = calls[-1]
         assert endpoint == "eks", calls[-1]
         assert body["workload"] == "team-eks" and body["kubernetes_version"] == "1.34" and body["environment"] == "dev"
-        assert body["azs"] == [] and body["node_instance_types"] == ["t3.small"] and body["node_min_size"] == 1
+        # Only the user's inputs go to score-api; the provisioner applies the platform defaults.
+        assert "azs" not in body and "node_instance_types" not in body, body
         assert "image" not in body and "runner_vault_role" not in body
 
         # A request relying on the default environment passes the module's contains([...]) rule.
         defaulted = {k: v for k, v in request.items() if k != "environment"}
         task = rpc(client, {"skill": EKS, **defaulted})["task"]
         assert task["status"]["state"] == "TASK_STATE_COMPLETED", task["status"]
-        assert calls[-1][1]["environment"] == "dev"
+        assert "environment" not in calls[-1][1], "left to the provisioner default (dev)"
 
         # Invalid requests never reach score-api.
         before = len(calls)
@@ -241,9 +242,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
                "change eks default instance type")
         rpc(client, {"skill": "list_capabilities"})
         assert len(crawls) == 2, crawls
-        store._facts_checked_at = 0
-        rpc(client, {"skill": EKS, **request})
-        assert calls[-1][1]["node_instance_types"] == ["t3.medium"], "the platform default follows the provisioner"
+
 
 # delete-all summaries describe the moment the call ended, once, without repeating score-api's msg.
 summary = _outcome({"status": "partial", "wiped_workloads": "rds-smoke", "wiped_eks_workloads": "eks-smoke",

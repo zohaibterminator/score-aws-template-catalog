@@ -470,7 +470,12 @@ def prepare_provision(report: dict[str, Any], tool_id: str, arguments: dict[str,
     issues += check["issues"]
     if issues:
         return {"verdict": "rejected", "issues": issues, "source_commit": check.get("source_commit")}
+    params = check["score_resource"]["params"]
+    if "inputs" in spec:
+        # Send only what the user gave; the provisioner applies the platform defaults. Filling hidden defaults here
+        # sent values such as node_security_group_id "" that score-api rightly rejects.
+        params = {k: v for k, v in params.items() if k in spec["inputs"] and arguments.get(k) not in (None, "")}
     return {"verdict": "accepted", "score_type": entry["score_type"], "endpoint": spec["endpoint"],
             "workload": fields.get("workload"), "image": fields.get("image"),
-            "params": check["score_resource"]["params"], "applied_defaults": check["applied_defaults"],
+            "params": params, "applied_defaults": check["applied_defaults"],
             "source_commit": check["source_commit"]}
