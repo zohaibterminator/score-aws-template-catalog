@@ -158,30 +158,14 @@ def _action_tools(agent: str) -> list[dict[str, Any]]:
         {
             "agent": agent, "provider": "score_api", "name": "resource_status",
             "id": f"{agent}.score_api.resource_status",
-            "description": "Reports provisioning progress right now, as one verdict for a request plus every "
-                           "Terraform resource in it: overall.state in_progress | succeeded | failed (overall.done "
-                           "true when finished; on failure overall.error names the resource, the step and why), and "
-                           "per resource its step (waiting for a dependency, planning, applying, ...), conditions, "
-                           "runner pod, log tail and events. Poll it after provision or delete-all, e.g. with the guid "
-                           "from the provision reply; task results only describe the moment a call ended.",
-            "inputSchema": {"type": "object", "properties": {
-                "capability": {"type": "string", "enum": CAPABILITIES,
-                               "description": "Only RDS databases, EKS clusters or network-access bastions. "
-                                              "Leave out for all."},
-                "workload": {**WORKLOAD_SCHEMA, "description": "Only the resources of this Score workload."},
-                "terraform_cr": {"type": "string", "pattern": "^(rds|eks|network-access|access)-[a-z0-9-]+$",
-                                 "description": "One resource by its Terraform CR name, e.g. eks-<guid>. "
-                                                "An empty result means it no longer exists."},
-                "guid": {"type": "string", "pattern": "^[a-z0-9-]{1,80}$",
-                         "description": "Everything one request created (e.g. eks-<guid> and its bundled "
-                                        "access-<guid>): the guid from the provision reply."},
-                "terraform_crs": {"type": "array", "maxItems": 20,
-                                  "items": {"type": "string", "pattern": "^(rds|eks|network-access|access)-[a-z0-9-]+$"},
-                                  "description": "Exactly these CRs (e.g. terraform_cr and network_access_cr from the "
-                                                 "provision reply); ones not created yet show as pending."},
-                "operation": {"type": "string", "enum": ["create", "delete"], "default": "create",
-                              "description": "delete: a resource that no longer exists counts as done."},
-            }, "required": [], "additionalProperties": False},
+            "description": "Reports provisioning progress right now, with no input: one overall verdict across "
+                           "everything provisioned (overall.state in_progress | succeeded | failed | none; overall.done "
+                           "true unless in progress; on failure overall.error names the resource, the step and why), "
+                           "one verdict per request (a cluster and its bundled network access count as one), and per "
+                           "resource its step (waiting for a dependency, planning, applying, rechecking, ...), "
+                           "conditions, runner pod, log tail and events. Poll it after provision or delete-all until "
+                           "overall.done; task results only describe the moment a call ended.",
+            "inputSchema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
             "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True,
                             "openWorldHint": True},
         },

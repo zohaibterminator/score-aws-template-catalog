@@ -316,14 +316,8 @@ class CapabilityExecutor(AgentExecutor):
 
         if tool == prefix + "resource_status":
             # Read-only and quick: answered directly, not as a task.
-            keys = ("capability", "workload", "terraform_cr", "guid", "terraform_crs", "operation")
-            filters = {k: arguments[k] for k in keys if arguments.get(k)}
-            unknown = sorted(set(arguments) - set(keys))
-            problems = [f"unknown argument {k!r}" for k in unknown]
-            if filters.get("capability") not in (None, *skills.CAPABILITIES):
-                problems.append(f"capability must be one of {skills.CAPABILITIES}")
-            if problems:
-                return self._parts("rejected: " + "; ".join(problems), {"verdict": "rejected", "issues": problems})
+            # No inputs: always the whole picture. Arguments from older callers are ignored, not rejected.
+            filters: dict[str, Any] = {}
             try:
                 result = await self.score_api.status(filters)
             except ScoreApiError as exc:

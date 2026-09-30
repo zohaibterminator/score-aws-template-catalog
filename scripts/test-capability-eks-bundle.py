@@ -107,10 +107,12 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             assert data["verdict"] == "rejected" and field in {i["field"] for i in data["issues"]}, (field, data)
         assert len(calls) == before, "invalid requests must not reach score-api"
 
-        # Status of the whole request: selectors pass through, the reply leads with the overall verdict.
-        status = rpc(client, {"skill": "call_tool", "tool": "infra.score_api.resource_status",
-                              "arguments": {"guid": GUID, "terraform_crs": [f"eks-{GUID}", f"access-{GUID}"]}})
-        assert calls[-1] == ("status", {"guid": GUID, "terraform_crs": [f"eks-{GUID}", f"access-{GUID}"]}), calls[-1]
+        # Status takes no input: the whole picture, led by the overall verdict.
+        status = rpc(client, {"skill": "call_tool", "tool": "infra.score_api.resource_status", "arguments": {}})
+        assert calls[-1] == ("status", {}), calls[-1]
+        manifest = rpc(client, {"skill": "list_capabilities"})["message"]["parts"][1]["data"]
+        status_schema = {t["id"]: t for t in manifest["tools"]}["infra.score_api.resource_status"]["inputSchema"]
+        assert status_schema["properties"] == {}, "resource_status takes no input"
         assert status["message"]["parts"][0]["text"].startswith(f"failed: access-{GUID} plan failed"), status
 
 print("Capability EKS bundle checks passed: real eks provisioner with the bundled network-access CR, extra inputs, "

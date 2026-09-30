@@ -195,13 +195,14 @@ The general stack behind `/rds`.
 
 ## 6a. Following a request: /cgi-bin/status
 
-Poll `infra.score_api.resource_status` (or `POST /cgi-bin/status`) with the `guid` from the provision reply until
-`overall.done` is true:
+Poll `infra.score_api.resource_status` (or `GET /cgi-bin/status`), with no input, until `overall.done` is true.
+The verdict covers everything provisioned; `requests` has one verdict per request (cluster + its network access):
 
 | `overall.state` | Meaning |
 |---|---|
 | `in_progress` | something is pending, waiting on a dependency, planning or applying (`overall.summary` says which) |
 | `succeeded` | every resource of the request is ready (for `operation: delete`: every one is gone) |
+| `none` | nothing is provisioned (e.g. after delete-all finished) |
 | `failed` | one resource failed; `overall.error` names it, the step (`plan_failed`, `apply_failed`, ...), the reason, the full message, error lines from its runner and warning events |
 
 Each resource also reports its `step`, conditions, revisions, runner pod (phase, restarts, log tail) and last events.

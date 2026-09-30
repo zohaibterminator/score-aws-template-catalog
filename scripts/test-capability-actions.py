@@ -160,18 +160,15 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         assert problems["environment"].startswith("must be one of") and "whole number" in problems["storage_gb"]
         assert len(calls) == before
 
-        # Live status: answered directly (no task), filters passed through, "gone" reported as such.
+        # Live status: answered directly (no task), no input: always the whole picture.
+        assert tools[STATUS]["inputSchema"]["properties"] == {}
         result = call(client, STATUS, {})
         text, data = message(result)
         assert "task" not in result and data["count"] == 2 and calls[-1] == ("status", {}), (result, calls[-1])
         assert "eks-111 (team-eks): deleting" in text and "rds-222 (orders): ready" in text, text
-        text, data = message(call(client, STATUS, {"capability": "eks"}))
-        assert calls[-1] == ("status", {"capability": "eks"}) and [r["terraform_cr"] for r in data["resources"]] == ["eks-111"]
-        text, data = message(call(client, STATUS, {"terraform_cr": "eks-999"}))
-        assert data["found"] is False and "it is gone" in text, text
-        before = len(calls)
-        text, _ = message(call(client, STATUS, {"capability": "s3", "colour": "red"}))
-        assert text.startswith("rejected") and "colour" in text and len(calls) == before, text
+        # Arguments from older callers are ignored, not passed on.
+        call(client, STATUS, {"capability": "eks", "colour": "red"})
+        assert calls[-1] == ("status", {}), calls[-1]
 
         # Invalid requests are rejected before score-api is called.
         before = len(calls)

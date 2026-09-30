@@ -76,7 +76,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         assert not {"ssh_allowed_cidrs", "ingress_allowed_cidrs", "api_allowed_cidrs"} & set(props), sorted(props)
         assert "tags" not in props and "image" not in props
         assert "bastion" in tools["infra.score_api.delete_all_resources"]["description"]
-        assert "network-access" in tools["infra.score_api.resource_status"]["inputSchema"]["properties"]["capability"]["enum"]
+        assert tools["infra.score_api.resource_status"]["inputSchema"]["properties"] == {}, "status takes no input"
 
         request = {"workload": "platform-access", "name": "score-dev-access", "aws_account_id": "412662188858",
                    "region": "us-east-1", "vpc_id": "vpc-0123456789abcdef0", "subnet_id": "subnet-0123456789abcdef0",
@@ -116,9 +116,8 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         assert "ssh_key_name" not in calls[-1][1], "the provisioner defaults ssh_key_name to platform-bastion"
         assert props["name"]["pattern"] == "^[a-z][a-z0-9-]{1,38}[a-z0-9]$"
 
-        data = rpc(client, {"skill": "call_tool", "tool": "infra.score_api.resource_status",
-                            "arguments": {"capability": "network-access"}})
-        assert calls[-1] == ("status", {"capability": "network-access"}), calls[-1]
+        data = rpc(client, {"skill": "call_tool", "tool": "infra.score_api.resource_status", "arguments": {}})
+        assert calls[-1] == ("status", {}), calls[-1]
 
 summary = _outcome({"status": "partial", "wiped_workloads": "", "wiped_eks_workloads": "team-eks",
                     "wiped_network_access_workloads": "platform-access", "destroyed_by_terraform": "",
