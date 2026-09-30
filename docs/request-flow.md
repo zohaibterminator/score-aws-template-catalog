@@ -163,7 +163,7 @@ The runner uses **only AWS APIs**. It never talks to the EKS API itself. In-clus
 |---|---|---|
 | `api_cidrs` | GlobalProtect Pakistan South (4) + office links 110.93.200.194/32, 202.125.133.221/32 | EKS public API endpoint |
 | `ingress_cidrs` | same 6 | NLB security group (80, 443) → 12 rules |
-| `ssh_cidrs` | GlobalProtect Pakistan South (4) + office links (2) | bastion SSH (TCP 22) |
+| `ssh_cidrs` | GlobalProtect Pakistan South (4) + office links (2) + private admin hosts 10.100.142.31-36 (3) | bastion SSH (TCP 22) |
 
 To change a list, edit `access-lists/main.tf` and release a new tag.
 
