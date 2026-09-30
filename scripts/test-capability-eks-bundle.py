@@ -33,6 +33,9 @@ calls: list[tuple[str, dict]] = []
 async def fake_score_api(request: httpx.Request) -> httpx.Response:
     endpoint, body = request.url.path.removeprefix("/cgi-bin/"), json.loads(request.content)
     calls.append((endpoint, body))
+    if endpoint == "status":
+        return httpx.Response(200, json={"status": "ok", "checked_at": "now", "resources": [], "overall": {
+            "state": "failed", "done": True, "summary": f"failed: access-{GUID} plan failed: InvalidSubnetID"}})
     bundled = body.get("enable_network_access", True)
     return httpx.Response(200, json={"status": "ok", "guid": GUID, "terraform_cr": f"eks-{GUID}",
                                      "namespace": "default", "output_secret": f"tf-output-{GUID}",
@@ -103,6 +106,12 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             data = rpc(client, {"skill": "call_tool", "tool": TOOL, "arguments": bad})["message"]["parts"][1]["data"]
             assert data["verdict"] == "rejected" and field in {i["field"] for i in data["issues"]}, (field, data)
         assert len(calls) == before, "invalid requests must not reach score-api"
+
+        # Status of the whole request: selectors pass through, the reply leads with the overall verdict.
+        status = rpc(client, {"skill": "call_tool", "tool": "infra.score_api.resource_status",
+                              "arguments": {"guid": GUID, "terraform_crs": [f"eks-{GUID}", f"access-{GUID}"]}})
+        assert calls[-1] == ("status", {"guid": GUID, "terraform_crs": [f"eks-{GUID}", f"access-{GUID}"]}), calls[-1]
+        assert status["message"]["parts"][0]["text"].startswith(f"failed: access-{GUID} plan failed"), status
 
 print("Capability EKS bundle checks passed: real eks provisioner with the bundled network-access CR, extra inputs, "
       "no leaked handoff variables, execution via /cgi-bin/eks.")

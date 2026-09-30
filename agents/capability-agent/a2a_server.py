@@ -209,6 +209,8 @@ def _status_summary(result: dict[str, Any], filters: dict[str, Any]) -> str:
         return f"score-api failed at {result.get('stage', '?')}: {result.get('msg', '')}"
     when = result.get("checked_at", "now")
     scope = ", ".join(f"{k}={v}" for k, v in filters.items()) or "all resources"
+    if overall := result.get("overall"):
+        return f"{overall.get('summary')} (as of {when}; {scope})"
     items = result.get("resources") or []
     if not items:
         return f"Nothing exists for {scope} as of {when}" + (" (it is gone)." if filters.get("terraform_cr") else ".")
@@ -314,8 +316,9 @@ class CapabilityExecutor(AgentExecutor):
 
         if tool == prefix + "resource_status":
             # Read-only and quick: answered directly, not as a task.
-            filters = {k: arguments[k] for k in ("capability", "workload", "terraform_cr") if arguments.get(k)}
-            unknown = sorted(set(arguments) - {"capability", "workload", "terraform_cr"})
+            keys = ("capability", "workload", "terraform_cr", "guid", "terraform_crs", "operation")
+            filters = {k: arguments[k] for k in keys if arguments.get(k)}
+            unknown = sorted(set(arguments) - set(keys))
             problems = [f"unknown argument {k!r}" for k in unknown]
             if filters.get("capability") not in (None, *skills.CAPABILITIES):
                 problems.append(f"capability must be one of {skills.CAPABILITIES}")

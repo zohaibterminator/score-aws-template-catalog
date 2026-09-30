@@ -193,6 +193,22 @@ The general stack behind `/rds`.
 
 ---
 
+## 6a. Following a request: /cgi-bin/status
+
+Poll `infra.score_api.resource_status` (or `POST /cgi-bin/status`) with the `guid` from the provision reply until
+`overall.done` is true:
+
+| `overall.state` | Meaning |
+|---|---|
+| `in_progress` | something is pending, waiting on a dependency, planning or applying (`overall.summary` says which) |
+| `succeeded` | every resource of the request is ready (for `operation: delete`: every one is gone) |
+| `failed` | one resource failed; `overall.error` names it, the step (`plan_failed`, `apply_failed`, ...), the reason, the full message, error lines from its runner and warning events |
+
+Each resource also reports its `step`, conditions, revisions, runner pod (phase, restarts, log tail) and last events.
+A bundled cluster counts as one request: `eks-<guid>` names `access-<guid>` in an annotation, so the request is not
+done until both are ready. Runner pods, logs and events need `score-api/k8s/rbac-status.yaml`; without it the verdict
+still works from the Terraform CRs.
+
 ## 7. Results and deletion
 
 - **Status:** `kubectl get terraform -A` shows each CR's plan and apply state. Outputs are in `kubectl get secret tf-output-<guid> -o yaml`.
