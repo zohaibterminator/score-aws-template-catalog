@@ -112,6 +112,19 @@ Terraform CRs from the one request:
   unchanged, as a backup or for clusters requested with `enable_network_access: false`. Clusters requested before
   bundling keep their shape: the provisioner's own default is false, and score-api sends true only for new requests.
 
+### Private NLB and the bastion tunnel
+
+With `ingress_nlb_scheme: "internal"` the NLB sits in the private subnets and allows only the VPC CIDR. The bastion
+runs a loopback forwarder (`127.0.0.1:8080` to the NLB's port 80, `127.0.0.1:8443` to 443), re-pointed at the current
+NLB by the add-on install, which also checks bastion -> NLB -> NGINX end to end. Users open a tunnel to the bastion
+(`ingress_tunnel_command` in `tf-output-<guid>-access`), then browse `http://localhost:8080`:
+
+```
+ssh -i ~/.ssh/platform-bastion -N -L 8080:127.0.0.1:8080 -L 8443:127.0.0.1:8443 ec2-user@<fixed bastion IP>
+```
+
+The command stays the same when the NLB is recreated (and, with the fixed Elastic IP, when the bastion is too).
+
 ## 3. Provisioners (score-gp-aws-rds)
 
 **Where:** `score-gp-aws-rds/<folder>/.score-k8s/<type>.provisioners.yaml`
