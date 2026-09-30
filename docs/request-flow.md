@@ -112,6 +112,12 @@ Terraform CRs from the one request:
   unchanged, as a backup or for clusters requested with `enable_network_access: false`. Clusters requested before
   bundling keep their shape: the provisioner's own default is false, and score-api sends true only for new requests.
 
+### The NLB is always private
+
+network-access always creates an **internal** NLB (private subnets, private IPs) that accepts only the VPC CIDR;
+`ingress_nlb_scheme` is ignored and score-api rejects anything but `internal`. A public (ssh mode) bastion also accepts
+TCP 80 from the GlobalProtect Pakistan South CIDRs, next to SSH.
+
 ## 3. Provisioners (score-gp-aws-rds)
 
 **Where:** `score-gp-aws-rds/<folder>/.score-k8s/<type>.provisioners.yaml`
