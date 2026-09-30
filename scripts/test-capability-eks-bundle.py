@@ -80,10 +80,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         schema = {t["id"]: t for t in manifest["tools"]}[TOOL]["inputSchema"]
         props = schema["properties"]
         assert set(props) == {"workload", "cluster_name", "aws_account_id", "region", "kubernetes_version",
-                              "environment", "enable_network_access", "bastion_access_mode",
-                              "ingress_nlb_scheme"}, sorted(props)
-        assert props["ingress_nlb_scheme"]["enum"] == ["internet-facing", "internal"]
-        assert props["ingress_nlb_scheme"]["default"] == "internet-facing"
+                              "environment", "enable_network_access", "bastion_access_mode"}, sorted(props)
         assert props["enable_network_access"]["type"] == "boolean" and props["enable_network_access"]["default"] is True
         assert props["bastion_access_mode"]["enum"] == ["ssm", "ssh"] and props["bastion_access_mode"]["default"] == "ssm"
         assert set(schema["required"]) == {"workload", "cluster_name", "aws_account_id", "region",
@@ -101,12 +98,9 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 
         rpc(client, {"skill": "call_tool", "tool": TOOL, "arguments": {**request, "enable_network_access": False}})
         assert calls[-1][1]["enable_network_access"] is False, calls[-1][1]
-        rpc(client, {"skill": "call_tool", "tool": TOOL, "arguments": {**request, "ingress_nlb_scheme": "Internal"}})
-        assert calls[-1][1]["ingress_nlb_scheme"] == "internal", calls[-1][1]
 
         before = len(calls)
         for bad, field in (({**request, "bastion_access_mode": "rdp"}, "bastion_access_mode"),
-                           ({**request, "ingress_nlb_scheme": "private"}, "ingress_nlb_scheme"),
                            ({**request, "ssh_key_name": "other"}, "ssh_key_name"),
                            ({**request, "vpc_id": "vpc-0123456789abcdef0"}, "vpc_id")):
             data = rpc(client, {"skill": "call_tool", "tool": TOOL, "arguments": bad})["message"]["parts"][1]["data"]

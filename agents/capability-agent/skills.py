@@ -87,12 +87,9 @@ SCORE_TYPES: dict[str, dict[str, Any]] = {
     # enable_network_access (score-api default true) also creates the bastion, load balancer controller, NGINX and
     # NLB in the same request, fed from the cluster's outputs; bastion_access_mode picks ssm or ssh for that bastion.
     "eks": {"endpoint": "eks", "fields": ["workload"],
-            "allowed": {"environment": ENVIRONMENTS, "plane": PLANES, "bastion_access_mode": ["ssm", "ssh"],
-                        "ingress_nlb_scheme": ["internet-facing", "internal"]},
-            # ingress_nlb_scheme internal: a private NLB, reached through a tunnel to the bastion's forwarder
-            # (the stack's ingress_tunnel_command output).
+            "allowed": {"environment": ENVIRONMENTS, "plane": PLANES, "bastion_access_mode": ["ssm", "ssh"]},
             "inputs": ["cluster_name", "aws_account_id", "region", "kubernetes_version", "environment",
-                       "enable_network_access", "bastion_access_mode", "ingress_nlb_scheme"],
+                       "enable_network_access", "bastion_access_mode"],
             # What score-api applies when the input is left out (the provisioner's own default differs so that
             # clusters requested before bundling keep their shape when re-rendered).
             "defaults": {"enable_network_access": True}},
