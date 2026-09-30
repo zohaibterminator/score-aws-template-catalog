@@ -100,7 +100,8 @@ Terraform CRs from the one request:
 - **Nothing is copied by hand.** The IDs AWS generates for the VPC, subnets and security group flow from the cluster
   stack's output Secret into the network-access stack.
 - **Inputs:** `bastion_access_mode` (`ssm` default, or `ssh` with key pair `platform-bastion` and an Elastic IP,
-  so the SSH address survives stop/start and instance replacement) and
+  so the SSH address survives stop/start and instance replacement; with score-api's BASTION_EIP_ALLOCATION_ID and
+  BASTION_HOST_KEY_PARAMETER set, every bastion takes the same pre-allocated IP and SSH host key) and
   `enable_network_access` (default true) are the only extra fields.
 - **One network-access stack per cluster.** `/eks` refuses to bundle when the cluster already has a separate stack
   (from `/network-access`), and `/network-access` refuses a cluster that already has a bundled one.
