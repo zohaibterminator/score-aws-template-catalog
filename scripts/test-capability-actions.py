@@ -14,6 +14,7 @@ import httpx
 from capability_fixtures import make_fixture
 from starlette.testclient import TestClient
 
+import a2a_server
 from a2a_server import build_app, masked
 from score_api import ScoreApi
 from store import CapabilityStore
@@ -25,6 +26,7 @@ STATUS = "infra.score_api.resource_status"
 AKID, SECRET_KEY = "AKIAABCDEFGHIJKLMNOP", "abcdEFGHijklMNOPqrstUVWXyz0123456789/+=="
 calls: list[tuple[str, dict]] = []
 score_api_status = "ok"
+delete_all = {"seconds": 0.5, "locked": False, "finished": 0}
 
 
 async def fake_score_api(request: httpx.Request) -> httpx.Response:
@@ -49,7 +51,10 @@ async def fake_score_api(request: httpx.Request) -> httpx.Response:
         if body["confirm"] != "DELETE-ALL":
             return httpx.Response(200, json={"status": "dry_run", "would_delete_workloads": "checkout-api",
                                              "would_delete_guids": "g-1", "msg": "resend"})
-        await asyncio.sleep(0.5)  # delete-all holds the connection open while Terraform destroys everything
+        if delete_all["locked"]:
+            return httpx.Response(200, json={"status": "error", "stage": "lock", "msg": "delete-all already running"})
+        await asyncio.sleep(delete_all["seconds"])  # holds the connection open while Terraform destroys everything
+        delete_all["finished"] += 1
         return httpx.Response(200, json={"status": "ok", "wiped_workloads": "checkout-api",
                                          "msg": "Full synchronous deletion completed"})
     return httpx.Response(404, text="not found")
@@ -212,6 +217,31 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         state, text, data = task_outcome(task)
         assert state == "TASK_STATE_COMPLETED" and data["wiped_workloads"] == "checkout-api", task
         assert calls[-1] == ("delete-all", {"confirm": "DELETE-ALL"})
+
+        # A delete-all that outlasts the wait answers "started" like provisioning (even for a blocking call,
+        # so no 60 s load balancer cuts it) and keeps running against score-api until it is done.
+        a2a_server.DELETE_ALL_WAIT_SECONDS, delete_all["seconds"] = 0.2, 2.0
+        finished, started = delete_all["finished"], time.time()
+        state, text, data = task_outcome(call(client, DELETE, {"confirm": "DELETE-ALL"})["task"])
+        assert time.time() - started < 1.5, "the blocking call waited for the delete"
+        assert state == "TASK_STATE_COMPLETED" and data["status"] == "started", (state, data)
+        assert "infra.score_api.resource_status" in text and "Do not resend" in text, text
+        assert calls[-1] == ("delete-all", {"confirm": "DELETE-ALL"}) and delete_all["finished"] == finished
+        deadline = time.time() + 10
+        while delete_all["finished"] == finished and time.time() < deadline:
+            time.sleep(0.1)
+        assert delete_all["finished"] == finished + 1, "the delete did not keep running after the answer"
+
+        # A quick refusal (lock held) still comes back as the real result, not "started".
+        delete_all["locked"] = True
+        state, text, data = task_outcome(call(client, DELETE, {"confirm": "DELETE-ALL"})["task"])
+        assert state == "TASK_STATE_FAILED" and "delete-all already running" in text, (state, text)
+        delete_all["locked"] = False
+
+        # The dry run is unchanged: always waits for the real answer.
+        state, text, _ = task_outcome(call(client, DELETE, {})["task"])
+        assert state == "TASK_STATE_COMPLETED" and text.startswith("Dry run:"), text
+        a2a_server.DELETE_ALL_WAIT_SECONDS, delete_all["seconds"] = 30.0, 0.5
 
     # Without score-api the agent still lists capabilities, but refuses to execute.
     app = build_app(store, public_url="http://agent/", auth_token=TOKEN, warm_up=False)

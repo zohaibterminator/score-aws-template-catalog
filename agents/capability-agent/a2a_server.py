@@ -40,6 +40,9 @@ from store import CapabilityStore, Snapshot
 
 log = logging.getLogger("capability-agent")
 OPEN_PATHS = {AGENT_CARD_WELL_KNOWN_PATH, "/healthz", "/readyz"}
+# A confirmed delete-all answers "started" after this long (the load balancer in front closes silent connections
+# after 60 s); the delete itself keeps running.
+DELETE_ALL_WAIT_SECONDS = 30.0
 USAGE = ('Send a data part: {"skill": "list_capabilities"}, {"skill": "check_request", "request": '
          '{"score_type": ..., "params": {...}, "expect": {...}}} or '
          '{"skill": "call_tool", "tool": "<tool id from the manifest>", "arguments": {...}}.')
@@ -250,6 +253,8 @@ class CapabilityExecutor(AgentExecutor):
     def __init__(self, store: CapabilityStore, manifest_provider: str, manifest_agent: str,
                  score_api: ScoreApi | None = None, manifest_plane: str = "resource"):
         self.store, self.score_api = store, score_api
+        self._background: set[asyncio.Future] = set()      # delete-all calls to score-api still running
+        self._answered_early: set[asyncio.Future] = set()  # ...of which the task already answered "started"
         self.manifest_provider, self.manifest_agent = manifest_provider, manifest_agent
         self.manifest_plane = manifest_plane
 
@@ -330,7 +335,12 @@ class CapabilityExecutor(AgentExecutor):
                 return self._parts(f'confirm must be "{DELETE_CONFIRMATION}", or left out for a dry run.')
             summary = ("Deleting every RDS database, EKS cluster and network-access bastion" if confirm
                        else "Checking what delete-all would remove")
-            await self._run_task(context, event_queue, summary, self.score_api.delete_all(confirm))
+            operation = self.score_api.delete_all(confirm)
+            if confirm:
+                # Answer like provisioning: report "started" within seconds and let the delete run on.
+                operation = self._answer_within(operation, DELETE_ALL_WAIT_SECONDS,
+                                                f"{self.manifest_agent}.score_api.resource_status")
+            await self._run_task(context, event_queue, summary, operation)
             return None
 
         # Provisioning is validated and sent by code from the deterministic facts; it never triggers the LLM.
@@ -351,6 +361,36 @@ class CapabilityExecutor(AgentExecutor):
             operation = self.score_api.flat(plan["endpoint"], plan["workload"], plan["params"])
         await self._run_task(context, event_queue, summary, operation)
         return None
+
+    async def _answer_within(self, operation, seconds: float, status_tool: str) -> dict[str, Any]:
+        """score-api's delete-all holds its connection until every destroy is done (5-20 minutes). Callers reach
+        this agent through a load balancer that closes connections silent for 60 s, so a confirmed delete-all
+        returns the real result only if it comes within `seconds` (refused, locked, nothing to delete, error);
+        otherwise it reports "started" and the call to score-api (in-cluster, no load balancer) keeps running."""
+        call = asyncio.ensure_future(operation)
+        self._background.add(call)  # kept (and its outcome logged) even if this request is cancelled meanwhile
+        call.add_done_callback(self._delete_all_finished)
+        try:
+            return await asyncio.wait_for(asyncio.shield(call), seconds)
+        except asyncio.TimeoutError:
+            pass
+        self._answered_early.add(call)
+        log.info("delete-all still running after %.0f s; answered 'started', continuing in the background", seconds)
+        return {"status": "started",
+                "msg": ("Delete-all started and continues in the background (5-20 minutes; network-access is "
+                        f"destroyed before EKS). Track it with {status_tool}: it is finished when no resources are "
+                        "listed. Do not resend it: score-api refuses a second delete-all while this one runs.")}
+
+    def _delete_all_finished(self, call: asyncio.Future) -> None:
+        self._background.discard(call)
+        answered_early = call in self._answered_early
+        self._answered_early.discard(call)
+        if call.cancelled():
+            log.warning("delete-all was cancelled before score-api answered")
+        elif call.exception() is not None:
+            log.error("delete-all failed: %s", call.exception())
+        elif answered_early:  # quick results are already in the task
+            log.info("delete-all (background) finished: %s", _outcome(call.result()))
 
     async def _run_task(self, context: RequestContext, event_queue: EventQueue, summary: str, operation) -> None:
         """Track a score-api call as an A2A task, so callers can return immediately and poll GetTask."""
