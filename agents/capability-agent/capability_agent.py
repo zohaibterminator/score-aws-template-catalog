@@ -103,7 +103,7 @@ def file_tools(roots: dict[str, Path]) -> list[Callable[..., str]]:
         root = resolve(repo)
         return "\n".join(
             p.relative_to(root).as_posix() for p in sorted(root.rglob("*"))
-            if p.is_file() and not {".git", ".terraform"}.intersection(p.relative_to(root).parts)
+            if p.is_file() and not {".git", ".terraform", "vendor"}.intersection(p.relative_to(root).parts)
             and p.name not in SKIPPED_FILES
         )
 

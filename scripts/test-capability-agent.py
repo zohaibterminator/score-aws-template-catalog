@@ -116,6 +116,18 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     assert "zz-default" not in list_files("score") and "pg.provisioners.yaml" in list_files("score")
     assert read_file("score", ".score-k8s/zz-default.provisioners.yaml").startswith("Skipped:")
 
+# Vendored third-party modules (score-tf-modules/vendor) are neither capabilities nor crawled.
+import terraform_facts
+
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+    root = Path(tmp)
+    for d in ("eks", "vendor/terraform-aws-eks", "vendor/terraform-aws-eks/modules/karpenter"):
+        (root / d).mkdir(parents=True)
+        (root / d / "main.tf").write_text('variable "x" {}\n', encoding="utf-8")
+    assert terraform_facts.module_dirs(root) == [root / "eks"], terraform_facts.module_dirs(root)
+    list_files, _ = capability_agent.file_tools({"modules": root})
+    assert list_files("modules").split() == ["eks/main.tf"], list_files("modules")
+
 sent: dict = {}
 
 

@@ -10,7 +10,9 @@ import hcl2
 VAR_REF = re.compile(r"\bvar\.([A-Za-z_][\w-]*)")
 LOCAL_REF = re.compile(r"\blocal\.([A-Za-z_][\w-]*)")
 CONDITIONAL = re.compile(r"\?|==|!=|<=|>=|\bcontains\(|\bcan\(|\btry\(")
-SKIP_DIRS = {".git", ".terraform"}
+# vendor/ holds third-party modules copied in for offline `tofu init` (score-tf-modules v1.16.0+). They are
+# building blocks of our modules, not capabilities; tofu still uses them through the ../vendor sources.
+SKIP_DIRS = {".git", ".terraform", "vendor"}
 
 
 def _unwrap(value: Any) -> Any:
